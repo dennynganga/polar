@@ -15,10 +15,13 @@ from polar.models.user_notification import UserNotification
 from polar.notifications.notification import (
     MaintainerPledgeConfirmationPendingNotification,
     MaintainerPledgeCreatedNotification,
+    MaintainerPledgedIssueConfirmationPendingNotification,
+    MaintainerPledgedIssuePendingNotification,
     MaintainerPledgePaidNotification,
     MaintainerPledgePendingNotification,
     NotificationBase,
     PledgerPledgePendingNotification,
+    RewardPaidNotification,
 )
 from polar.postgres import AsyncSession
 from polar.user_organization.service import (
@@ -153,6 +156,9 @@ class NotificationsService:
         MaintainerPledgePendingNotification,
         MaintainerPledgePaidNotification,
         PledgerPledgePendingNotification,
+        RewardPaidNotification,
+        MaintainerPledgedIssueConfirmationPendingNotification,
+        MaintainerPledgedIssuePendingNotification,
     ]:
         match n.type:
             case "MaintainerPledgeCreatedNotification":
@@ -167,6 +173,17 @@ class NotificationsService:
                 return parse_obj_as(MaintainerPledgePaidNotification, n.payload)
             case "PledgerPledgePendingNotification":
                 return parse_obj_as(PledgerPledgePendingNotification, n.payload)
+            case "RewardPaidNotification":
+                return parse_obj_as(RewardPaidNotification, n.payload)
+            case "MaintainerPledgedIssueConfirmationPendingNotification":
+                return parse_obj_as(
+                    MaintainerPledgedIssueConfirmationPendingNotification, n.payload
+                )
+            case "MaintainerPledgedIssuePendingNotification":
+                return parse_obj_as(
+                    MaintainerPledgedIssuePendingNotification, n.payload
+                )
+
         raise ValueError(f"unknown notificaiton type {n.type}")
 
     async def get_user_last_read(

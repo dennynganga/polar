@@ -8,9 +8,8 @@ import {
 } from 'polarkit/api/client'
 import { useSSE } from 'polarkit/hooks'
 import { useEffect, useRef, useState } from 'react'
-import OrganizationDashboard from './OrganizationDashboard'
-import PersonalDashboard from './PersonalDashboard'
-import { DashboardFilters } from './filters'
+import OrganizationIssues from './OrganizationIssues'
+import { DashboardFilters, DefaultFilters } from './filters'
 
 const buildStatusesFilter = (filters: DashboardFilters): Array<IssueStatus> => {
   const next = []
@@ -20,19 +19,6 @@ const buildStatusesFilter = (filters: DashboardFilters): Array<IssueStatus> => {
   filters.statusPullRequest && next.push(IssueStatus.PULL_REQUEST)
   filters.statusClosed && next.push(IssueStatus.CLOSED)
   return next
-}
-
-export const DefaultFilters: DashboardFilters = {
-  tab: IssueListType.ISSUES,
-  q: '',
-  statusBacklog: true,
-  statusTriaged: true,
-  statusInProgress: true,
-  statusPullRequest: true,
-  statusClosed: false,
-  sort: undefined,
-  onlyPledged: false,
-  onlyBadged: false,
 }
 
 const getSort = (sort: string | null): IssueSortBy => {
@@ -60,12 +46,10 @@ const getSort = (sort: string | null): IssueSortBy => {
 const Dashboard = ({
   org,
   repo,
-  isPersonal,
   isDependencies,
 }: {
   org: Organization | undefined
   repo: Repository | undefined
-  isPersonal: boolean
   isDependencies: boolean
 }) => {
   const router = useRouter()
@@ -88,10 +72,9 @@ const Dashboard = ({
       didSetFiltersFromURL.current = true
       const s = new URLSearchParams(window.location.search)
 
-      const tab =
-        isPersonal || isDependencies
-          ? IssueListType.DEPENDENCIES
-          : IssueListType.ISSUES
+      const tab = isDependencies
+        ? IssueListType.DEPENDENCIES
+        : IssueListType.ISSUES
 
       const f: DashboardFilters = {
         ...DefaultFilters,
@@ -121,7 +104,7 @@ const Dashboard = ({
 
       setFilters(f)
     }
-  }, [router.query, isPersonal])
+  }, [router.query])
 
   let [statuses, setStatuses] = useState<Array<IssueStatus>>(
     buildStatusesFilter(filters),
@@ -129,22 +112,12 @@ const Dashboard = ({
 
   useEffect(() => setStatuses(buildStatusesFilter(filters)), [filters])
 
-  if (isPersonal) {
-    return (
-      <PersonalDashboard
-        filters={filters}
-        onSetFilters={setFilters}
-        statuses={statuses}
-      />
-    )
-  }
-
   if (!org || !org.name) {
     return <></>
   }
 
   return (
-    <OrganizationDashboard
+    <OrganizationIssues
       filters={filters}
       onSetFilters={setFilters}
       statuses={statuses}

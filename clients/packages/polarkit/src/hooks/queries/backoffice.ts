@@ -1,6 +1,5 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { api, queryClient } from '../../api'
-import { PledgeRead } from '../../api/client'
 import { BackofficeBadge } from '../../api/client'
 import { defaultRetry } from './retry'
 
@@ -9,30 +8,54 @@ export const useBackofficeAllPledges = () =>
     retry: defaultRetry,
   })
 
-export const useBackofficeAllNonCustomerPledges = () =>
+export const useBackofficeRewards = (issueId?: string) =>
   useQuery(
-    ['backofficeAllNonCustomerPledges'],
-    () => api.backoffice.pledgesNonCustomers(),
+    ['useBackofficeRewards', issueId],
+    () =>
+      api.backoffice.rewards({
+        issueId,
+      }),
+    {
+      retry: defaultRetry,
+      enabled: !!issueId,
+    },
+  )
+
+export const useBackofficeRewardsPending = () =>
+  useQuery(
+    ['useBackofficeRewardsPending'],
+    () => api.backoffice.rewardsPending(),
     {
       retry: defaultRetry,
     },
   )
 
-export const useBackofficePledgeApprove = () =>
+export const useBackofficeIssue = (issueId?: string) =>
+  useQuery(
+    ['useBackofficeIssue', issueId],
+    () =>
+      api.backoffice.issue({
+        id: issueId || '',
+      }),
+    {
+      retry: defaultRetry,
+      enabled: !!issueId,
+    },
+  )
+
+export const useBackofficePledgeRewardTransfer = () =>
   useMutation({
-    mutationFn: (variables: { pledgeId: string }) => {
-      return api.backoffice.pledgeApprove({
-        pledgeId: variables.pledgeId,
+    mutationFn: (variables: { pledgeId: string; issueRewardId: string }) => {
+      return api.backoffice.pledgeRewardTransfer({
+        requestBody: {
+          pledge_id: variables.pledgeId,
+          issue_reward_id: variables.issueRewardId,
+        },
       })
     },
     onSuccess: (result, variables, ctx) => {
-      queryClient.setQueryData<Array<PledgeRead> | undefined>(
-        ['backofficeAllPledges'],
-        (oldData) =>
-          oldData
-            ? oldData.map((p) => (p.id === result.id ? result : p))
-            : oldData,
-      )
+      queryClient.invalidateQueries(['backofficeAllPledges'])
+      queryClient.invalidateQueries(['useBackofficeRewards'])
     },
   })
 
@@ -44,13 +67,8 @@ export const useBackofficePledgeMarkPending = () =>
       })
     },
     onSuccess: (result, variables, ctx) => {
-      queryClient.setQueryData<Array<PledgeRead> | undefined>(
-        ['backofficeAllPledges'],
-        (oldData) =>
-          oldData
-            ? oldData.map((p) => (p.id === result.id ? result : p))
-            : oldData,
-      )
+      queryClient.invalidateQueries(['backofficeAllPledges'])
+      queryClient.invalidateQueries(['useBackofficeRewards'])
     },
   })
 
@@ -62,41 +80,16 @@ export const useBackofficePledgeMarkDisputed = () =>
       })
     },
     onSuccess: (result, variables, ctx) => {
-      queryClient.setQueryData<Array<PledgeRead> | undefined>(
-        ['backofficeAllPledges'],
-        (oldData) =>
-          oldData
-            ? oldData.map((p) => (p.id === result.id ? result : p))
-            : oldData,
-      )
+      queryClient.invalidateQueries(['backofficeAllPledges'])
+      queryClient.invalidateQueries(['useBackofficeRewards'])
     },
   })
-
-export const useBackofficeListInvites = () =>
-  useQuery(['useBackofficeListInvites'], () => api.backoffice.invitesList(), {
-    retry: defaultRetry,
-  })
-
-export const useBackofficeCreateInviteCode = () =>
-  useMutation({
-    mutationFn: (note?: string | undefined) => {
-      return api.backoffice.invitesCreateCode({
-        requestBody: {
-          note,
-        },
-      })
-    },
-    onSuccess: (result, variables, ctx) => {
-      queryClient.invalidateQueries(['useBackofficeListInvites'])
-    },
-  })
-
 
 export const useBackofficeBadgeAction = () =>
   useMutation({
     mutationFn: (badgeAction: BackofficeBadge) => {
       return api.backoffice.manageBadge({
-        requestBody: badgeAction
+        requestBody: badgeAction,
       })
-    }
+    },
   })

@@ -1,5 +1,4 @@
 import BadgeMessageForm from '@/components/Dashboard/BadgeMessageForm'
-import MoneyInput from '@/components/UI/MoneyInput'
 import {
   ExclamationCircleIcon,
   QuestionMarkCircleIcon,
@@ -13,7 +12,7 @@ import {
   type OrganizationBadgeSettingsUpdate,
   type RepositoryBadgeSettingsRead,
 } from 'polarkit/api/client'
-import { PrimaryButton } from 'polarkit/components/ui'
+import { MoneyInput, PrimaryButton } from 'polarkit/components/ui'
 import { useBadgeSettings, useSSE } from 'polarkit/hooks'
 import { classNames } from 'polarkit/utils'
 import { useEffect, useMemo, useState, type MouseEvent } from 'react'
@@ -436,7 +435,7 @@ export const Controls = ({
   const router = useRouter()
 
   const redirectToOrgDashboard = () => {
-    router.push(`/issues/${org.name}`)
+    router.push(`/maintainer/${org.name}/issues`)
   }
 
   const isRetroactiveApplicable = (

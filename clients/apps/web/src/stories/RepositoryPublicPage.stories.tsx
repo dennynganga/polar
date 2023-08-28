@@ -3,7 +3,7 @@ import RepositoryPublicPage from '@/components/Organization/RepositoryPublicPage
 import type { Meta, StoryObj } from '@storybook/react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClient } from 'polarkit'
-import { issueRead, org, repo } from './testdata'
+import { issue, org, repo } from './testdata'
 
 const meta: Meta<typeof RepositoryPublicPage> = {
   title: 'Pages/RepositoryPublicPage',
@@ -39,7 +39,8 @@ export const Default: Story = {
   args: {
     organization: orgWithBio,
     repository: repoWithData,
-    issues: [issueRead, issueRead, issueRead, issueRead, issueRead, issueRead],
+    repositories: [repo],
+    issues: [issue, issue, issue, issue, issue, issue],
   },
   render: (args) => {
     return (
@@ -63,17 +64,38 @@ export const Dark: Story = {
 export const WithoutBio: Story = {
   ...Default,
   args: {
+    ...Default.args,
     organization: org,
-    repository: repo,
-    issues: [issueRead, issueRead, issueRead, issueRead, issueRead, issueRead],
+    repository: {
+      ...repo,
+      description: undefined,
+    },
   },
 }
 
 export const WithoutBioAndLicense: Story = {
   ...Default,
   args: {
-    organization: org,
-    repository: { ...repo, license: undefined, stars: 0 },
-    issues: [issueRead, issueRead, issueRead, issueRead, issueRead, issueRead],
+    ...Default.args,
+    repository: {
+      ...repo,
+      description: undefined,
+      license: undefined,
+      stars: 0,
+    },
+  },
+}
+
+export const WithoutBioAndLicenseAndLink: Story = {
+  ...Default,
+  args: {
+    ...Default.args,
+    repository: {
+      ...repo,
+      description: undefined,
+      license: undefined,
+      stars: 0,
+      homepage: undefined,
+    },
   },
 }

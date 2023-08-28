@@ -1,24 +1,36 @@
 import Modal, { ModalBox } from '@/components/Shared/Modal'
 import { XMarkIcon } from '@heroicons/react/24/outline'
-import { api } from 'polarkit'
-import { AccountRead, AccountType, ApiError, Platforms } from 'polarkit/api/client'
-import { getValidationErrorsMap, isValidationError } from 'polarkit/api/errors'
-import { CountryPicker } from 'polarkit/components'
-import { PrimaryButton } from 'polarkit/components/ui'
-import { useStore } from 'polarkit/store'
-import { ACCOUNT_TYPES, ACCOUNT_TYPE_DISPLAY_NAMES } from 'polarkit/account'
-import { ChangeEvent, useState } from 'react'
 import { useRouter } from 'next/router'
+import { api } from 'polarkit'
+import { ACCOUNT_TYPE_DISPLAY_NAMES } from 'polarkit/account'
+import { Account, AccountType, ApiError } from 'polarkit/api/client'
+import { getValidationErrorsMap, isValidationError } from 'polarkit/api/errors'
+import { CountryPicker, PrimaryButton } from 'polarkit/components/ui'
+import { ChangeEvent, useState } from 'react'
 
-const SetupAccount = ({ onClose }: { onClose: () => void }) => {
-  const router = useRouter();
+const SetupAccount = ({
+  onClose,
+  forOrganizationId,
+  forUserId,
+  accountTypes,
+}: {
+  onClose: () => void
+  forOrganizationId?: string
+  forUserId?: string
+  accountTypes: AccountType[]
+}) => {
+  const router = useRouter()
 
-  const currentOrg = useStore((store) => store.currentOrg)
-
-  const [accountType, setAccountType] = useState<AccountType>(AccountType.STRIPE)
-  const [openCollectiveSlug, setOpenCollectiveSlug] = useState<string | null>(null)
+  const [accountType, setAccountType] = useState<AccountType>(
+    AccountType.STRIPE,
+  )
+  const [openCollectiveSlug, setOpenCollectiveSlug] = useState<string | null>(
+    null,
+  )
   const [country, setCountry] = useState<string>('US')
-  const [validationErrors, setValidationErrors] = useState<Record<string, string[]>>({})
+  const [validationErrors, setValidationErrors] = useState<
+    Record<string, string[]>
+  >({})
   const [errorMessage, setErrorMessage] = useState<string | undefined>()
 
   const [loading, setLoading] = useState(false)
@@ -46,23 +58,20 @@ const SetupAccount = ({ onClose }: { onClose: () => void }) => {
   const onConfirm = async () => {
     setLoading(true)
 
-    if (!currentOrg) {
-      throw Error('no org set')
-    }
-
     try {
-      const account = await api.accounts.createAccount({
-        platform: Platforms.GITHUB,
-        orgName: currentOrg.name,
+      const account = await api.accounts.create({
         requestBody: {
+          organization_id: forOrganizationId,
+          user_id: forUserId,
           account_type: accountType,
           country,
-          ...openCollectiveSlug ? {open_collective_slug: openCollectiveSlug } : {},
+          ...(openCollectiveSlug
+            ? { open_collective_slug: openCollectiveSlug }
+            : {}),
         },
       })
 
       await goToOnboarding(account)
-
     } catch (e) {
       if (e instanceof ApiError) {
         if (isValidationError(e)) {
@@ -76,18 +85,12 @@ const SetupAccount = ({ onClose }: { onClose: () => void }) => {
     }
   }
 
-  const goToOnboarding = async (account: AccountRead) => {
-    if (!currentOrg) {
-      throw Error('no org set')
-    }
-
+  const goToOnboarding = async (account: Account) => {
     setLoading(true)
 
     try {
       const link = await api.accounts.onboardingLink({
-        platform: Platforms.GITHUB,
-        orgName: currentOrg.name,
-        accountId: account.id,
+        id: account.id,
       })
       window.location.href = link.url
     } catch (e) {
@@ -118,56 +121,68 @@ const SetupAccount = ({ onClose }: { onClose: () => void }) => {
                   onChange={onChangeAccountType}
                   className="font-display block w-full rounded-lg border-gray-200 bg-transparent py-2 px-4 pr-12 shadow-sm transition-colors focus:z-10 focus:border-blue-500 focus:ring-blue-500 dark:border-gray-500"
                 >
-                  {ACCOUNT_TYPES.map((v: AccountType) =>
-                    <option
-                      key={v}
-                      value={v}
-                      selected={v === accountType}
-                    >
+                  {accountTypes.map((v: AccountType) => (
+                    <option key={v} value={v} selected={v === accountType}>
                       {ACCOUNT_TYPE_DISPLAY_NAMES[v]}
                     </option>
-                  )} 
+                  ))}
                 </select>
-                {validationErrors.account_type?.map((error) => <p key={error} className="text-xs text-red-500 mt-2">{error}</p>)}
+                {validationErrors.account_type?.map((error) => (
+                  <p key={error} className="mt-2 text-xs text-red-500">
+                    {error}
+                  </p>
+                ))}
               </div>
 
-              {accountType === AccountType.OPEN_COLLECTIVE &&
+              {accountType === AccountType.OPEN_COLLECTIVE && (
                 <div>
                   <div className="relative mt-2">
                     <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
-                      <span className="font-display text-gray-500 dark:text-gray-40">https://opencollective.com/</span>
+                      <span className="font-display dark:text-gray-40 text-gray-500">
+                        https://opencollective.com/
+                      </span>
                     </div>
-                    <input 
+                    <input
                       type="text"
                       id="open_collective_slug"
                       name="open_collective_slug"
-                      className="pl-60 font-display block w-full rounded-lg border-gray-200 bg-transparent py-2 shadow-sm transition-colors focus:z-10 focus:border-blue-500 focus:ring-blue-500 dark:border-gray-500"
+                      className="font-display block w-full rounded-lg border-gray-200 bg-transparent py-2 pl-60 shadow-sm transition-colors focus:z-10 focus:border-blue-500 focus:ring-blue-500 dark:border-gray-500"
                       value={openCollectiveSlug || ''}
                       onChange={onChangeOpenCollectiveSlug}
                       required
                     />
                   </div>
-                  {validationErrors.open_collective_slug?.map((error) => <p key={error} className="text-xs text-red-500 mt-2">{error}</p>)}
+                  {validationErrors.open_collective_slug?.map((error) => (
+                    <p key={error} className="mt-2 text-xs text-red-500">
+                      {error}
+                    </p>
+                  ))}
                 </div>
-              }
+              )}
 
               <div>
                 <CountryPicker onSelectCountry={onChangeCountry} />
-                <p
-                  className="text-xs font-medium text-gray-500 dark:text-gray-40 text-justify mt-2"
-                >
+                <p className="dark:text-gray-40 mt-2 text-justify text-xs font-medium text-gray-500">
                   If this is a personal account, please select your country of
                   residence. If this is an organization or business, select the
                   country of tax residency.
                 </p>
-                {validationErrors.country?.map((error) => <p key={error} className="text-xs text-red-500 mt-2">{error}</p>)}
+                {validationErrors.country?.map((error) => (
+                  <p key={error} className="mt-2 text-xs text-red-500">
+                    {error}
+                  </p>
+                ))}
               </div>
             </div>
 
             {errorMessage && (
               <p className="text-xs text-red-500">{errorMessage}</p>
             )}
-            {validationErrors.__root__?.map((error) => <p key={error} className="text-xs text-red-500 mt-2">{error}</p>)}
+            {validationErrors.__root__?.map((error) => (
+              <p key={error} className="mt-2 text-xs text-red-500">
+                {error}
+              </p>
+            ))}
           </form>
 
           <div className="md:flex-1"></div>

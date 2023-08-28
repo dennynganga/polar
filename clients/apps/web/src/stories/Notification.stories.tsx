@@ -3,6 +3,11 @@ import type { Meta, StoryObj } from '@storybook/react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClient } from 'polarkit'
 import {
+  MaintainerPledgedIssueConfirmationPendingNotification,
+  MaintainerPledgedIssuePendingNotification,
+  NotificationType,
+} from 'polarkit/api/client'
+import {
   MaintainerPledgeConfirmationPending,
   Notification,
 } from '../components/Notifications/Popover'
@@ -12,6 +17,7 @@ import {
   notification_maintainerPledgePaidNotification,
   notification_maintainerPledgePendingNotification,
   notification_pledgerPledgePendingNotification,
+  notification_rewardPaidNotification,
 } from './testdata'
 
 const meta: Meta<typeof Notification> = {
@@ -89,11 +95,67 @@ export const MaintainerPledgeConfirmationPendingNotificationItemLoading: StoryCo
     },
   }
 
-export const MaintainerPledgeConfirmationPendingNotificationItemIsSolved: StoryConfirmationPending =
+export const RewardPaidNotificationItem: Story = {
+  args: {
+    n: notification_rewardPaidNotification,
+  },
+}
+
+export const MaintainerPledgedIssuePendingNotificationItem: Story = {
+  args: {
+    n: {
+      ...notification_maintainerPledgeCreatedNotification,
+      type: NotificationType.MAINTAINER_PLEDGED_ISSUE_PENDING_NOTIFICATION,
+      payload: {
+        pledge_amount_sum: '123.50',
+        issue_url: '#',
+        issue_title: 'Hello World',
+        issue_org_name: 'polarsource',
+        issue_repo_name: 'polar',
+        issue_number: 123,
+        issue_id: 'xx',
+        maintainer_has_account: false,
+      } as MaintainerPledgedIssuePendingNotification,
+    },
+  },
+}
+
+export const MaintainerPledgedIssueConfirmationPendingNotificationItem: StoryConfirmationPending =
   {
-    ...MaintainerPledgeConfirmationPendingNotificationItem,
     args: {
-      ...MaintainerPledgeConfirmationPendingNotificationItem.args,
-      isMarkedSolved: true,
+      n: {
+        ...notification_maintainerPledgeCreatedNotification,
+        type: NotificationType.MAINTAINER_PLEDGED_ISSUE_CONFIRMATION_PENDING_NOTIFICATION,
+        payload: {
+          pledge_amount_sum: '123.50',
+          issue_url: '#',
+          issue_title: 'Hello World',
+          issue_org_name: 'polarsource',
+          issue_repo_name: 'polar',
+          issue_number: 123,
+          issue_id: 'xx',
+          maintainer_has_account: false,
+        } as MaintainerPledgedIssueConfirmationPendingNotification,
+      },
+      payload: {
+        pledge_amount_sum: '123.50',
+        issue_url: '#',
+        issue_title: 'Hello World',
+        issue_org_name: 'polarsource',
+        issue_repo_name: 'polar',
+        issue_number: 123,
+        issue_id: 'xx',
+        maintainer_has_account: false,
+      } as MaintainerPledgedIssueConfirmationPendingNotification,
+      canMarkSolved: false,
+      isMarkedSolved: false,
+      onMarkSoved: async () => {},
+    },
+    render: (args) => {
+      return (
+        <QueryClientProvider client={queryClient}>
+          <MaintainerPledgeConfirmationPending {...args} />
+        </QueryClientProvider>
+      )
     },
   }

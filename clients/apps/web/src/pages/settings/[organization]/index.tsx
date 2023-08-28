@@ -8,8 +8,8 @@ import { ReactElement, useEffect } from 'react'
 const Page: NextPageWithLayout = () => {
   const router = useRouter()
   useEffect(() => {
-    router.push(`/issues`)
-  })
+    router.push(`/maintainer`)
+  }, [router])
 
   return (
     <>

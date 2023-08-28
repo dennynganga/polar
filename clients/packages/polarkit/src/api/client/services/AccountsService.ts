@@ -1,10 +1,10 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { Account } from '../models/Account';
 import type { AccountCreate } from '../models/AccountCreate';
 import type { AccountLink } from '../models/AccountLink';
-import type { AccountRead } from '../models/AccountRead';
-import type { Platforms } from '../models/Platforms';
+import type { ListResource_Account_ } from '../models/ListResource_Account_';
 
 import type { CancelablePromise } from '../core/CancelablePromise';
 import type { BaseHttpRequest } from '../core/BaseHttpRequest';
@@ -14,23 +14,29 @@ export class AccountsService {
   constructor(public readonly httpRequest: BaseHttpRequest) {}
 
   /**
-   * Get Accounts
-   * @returns AccountRead Successful Response
+   * Search
+   * @returns ListResource_Account_ Successful Response
    * @throws ApiError
    */
-  public getAccounts({
-    platform,
-    orgName,
+  public search({
+    organizationId,
+    userId,
   }: {
-    platform: Platforms,
-    orgName: string,
-  }): CancelablePromise<Array<AccountRead>> {
+    /**
+     * Search accounts connected to this organization. Either user_id or organization_id must be set.
+     */
+    organizationId?: string,
+    /**
+     * Search accounts connected to this user. Either user_id or organization_id must be set.
+     */
+    userId?: string,
+  }): CancelablePromise<ListResource_Account_> {
     return this.httpRequest.request({
       method: 'GET',
-      url: '/api/v1/{platform}/{org_name}/accounts',
-      path: {
-        'platform': platform,
-        'org_name': orgName,
+      url: '/api/v1/accounts/search',
+      query: {
+        'organization_id': organizationId,
+        'user_id': userId,
       },
       errors: {
         422: `Validation Error`,
@@ -39,28 +45,21 @@ export class AccountsService {
   }
 
   /**
-   * Create Account
-   * @returns AccountRead Successful Response
+   * Get
+   * @returns Account Successful Response
    * @throws ApiError
    */
-  public createAccount({
-    platform,
-    orgName,
-    requestBody,
+  public get({
+    id,
   }: {
-    platform: Platforms,
-    orgName: string,
-    requestBody: AccountCreate,
-  }): CancelablePromise<AccountRead> {
+    id: string,
+  }): CancelablePromise<Account> {
     return this.httpRequest.request({
-      method: 'POST',
-      url: '/api/v1/{platform}/{org_name}/accounts',
+      method: 'GET',
+      url: '/api/v1/accounts/{id}',
       path: {
-        'platform': platform,
-        'org_name': orgName,
+        'id': id,
       },
-      body: requestBody,
-      mediaType: 'application/json',
       errors: {
         422: `Validation Error`,
       },
@@ -73,21 +72,15 @@ export class AccountsService {
    * @throws ApiError
    */
   public onboardingLink({
-    platform,
-    orgName,
-    accountId,
+    id,
   }: {
-    platform: Platforms,
-    orgName: string,
-    accountId: string,
+    id: string,
   }): CancelablePromise<AccountLink> {
     return this.httpRequest.request({
-      method: 'GET',
-      url: '/api/v1/{platform}/{org_name}/accounts/{account_id}/onboarding_link',
+      method: 'POST',
+      url: '/api/v1/accounts/{id}/onboarding_link',
       path: {
-        'platform': platform,
-        'org_name': orgName,
-        'account_id': accountId,
+        'id': id,
       },
       errors: {
         422: `Validation Error`,
@@ -101,22 +94,37 @@ export class AccountsService {
    * @throws ApiError
    */
   public dashboardLink({
-    platform,
-    orgName,
-    accountId,
+    id,
   }: {
-    platform: Platforms,
-    orgName: string,
-    accountId: string,
+    id: string,
   }): CancelablePromise<AccountLink> {
     return this.httpRequest.request({
-      method: 'GET',
-      url: '/api/v1/{platform}/{org_name}/accounts/{account_id}/dashboard_link',
+      method: 'POST',
+      url: '/api/v1/accounts/{id}/dashboard_link',
       path: {
-        'platform': platform,
-        'org_name': orgName,
-        'account_id': accountId,
+        'id': id,
       },
+      errors: {
+        422: `Validation Error`,
+      },
+    });
+  }
+
+  /**
+   * Create
+   * @returns Account Successful Response
+   * @throws ApiError
+   */
+  public create({
+    requestBody,
+  }: {
+    requestBody: AccountCreate,
+  }): CancelablePromise<Account> {
+    return this.httpRequest.request({
+      method: 'POST',
+      url: '/api/v1/accounts',
+      body: requestBody,
+      mediaType: 'application/json',
       errors: {
         422: `Validation Error`,
       },

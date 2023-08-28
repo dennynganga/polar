@@ -3,10 +3,12 @@
 /* eslint-disable */
 import type { BackofficeBadge } from '../models/BackofficeBadge';
 import type { BackofficeBadgeResponse } from '../models/BackofficeBadgeResponse';
-import type { BackofficePledgeRead } from '../models/BackofficePledgeRead';
-import type { InviteCreate } from '../models/InviteCreate';
-import type { InviteRead } from '../models/InviteRead';
+import type { BackofficePledge } from '../models/BackofficePledge';
+import type { BackofficeReward } from '../models/BackofficeReward';
+import type { Issue } from '../models/Issue';
+import type { ListResource_BackofficeReward_ } from '../models/ListResource_BackofficeReward_';
 import type { OrganizationPrivateRead } from '../models/OrganizationPrivateRead';
+import type { PledgeRewardTransfer } from '../models/PledgeRewardTransfer';
 
 import type { CancelablePromise } from '../core/CancelablePromise';
 import type { BaseHttpRequest } from '../core/BaseHttpRequest';
@@ -17,10 +19,10 @@ export class BackofficeService {
 
   /**
    * Pledges
-   * @returns BackofficePledgeRead Successful Response
+   * @returns BackofficePledge Successful Response
    * @throws ApiError
    */
-  public pledges(): CancelablePromise<Array<BackofficePledgeRead>> {
+  public pledges(): CancelablePromise<Array<BackofficePledge>> {
     return this.httpRequest.request({
       method: 'GET',
       url: '/api/v1/backoffice/pledges',
@@ -28,32 +30,20 @@ export class BackofficeService {
   }
 
   /**
-   * Pledges Non Customers
-   * @returns BackofficePledgeRead Successful Response
+   * Rewards
+   * @returns ListResource_BackofficeReward_ Successful Response
    * @throws ApiError
    */
-  public pledgesNonCustomers(): CancelablePromise<Array<BackofficePledgeRead>> {
+  public rewards({
+    issueId,
+  }: {
+    issueId?: string,
+  }): CancelablePromise<ListResource_BackofficeReward_> {
     return this.httpRequest.request({
       method: 'GET',
-      url: '/api/v1/backoffice/pledges/non_customers',
-    });
-  }
-
-  /**
-   * Pledge Approve
-   * @returns BackofficePledgeRead Successful Response
-   * @throws ApiError
-   */
-  public pledgeApprove({
-    pledgeId,
-  }: {
-    pledgeId: string,
-  }): CancelablePromise<BackofficePledgeRead> {
-    return this.httpRequest.request({
-      method: 'POST',
-      url: '/api/v1/backoffice/pledges/approve/{pledge_id}',
-      path: {
-        'pledge_id': pledgeId,
+      url: '/api/v1/backoffice/rewards/by_issue',
+      query: {
+        'issue_id': issueId,
       },
       errors: {
         422: `Validation Error`,
@@ -62,15 +52,70 @@ export class BackofficeService {
   }
 
   /**
+   * Rewards Pending
+   * @returns ListResource_BackofficeReward_ Successful Response
+   * @throws ApiError
+   */
+  public rewardsPending(): CancelablePromise<ListResource_BackofficeReward_> {
+    return this.httpRequest.request({
+      method: 'GET',
+      url: '/api/v1/backoffice/rewards/pending',
+    });
+  }
+
+  /**
+   * Issue
+   * @returns Issue Successful Response
+   * @throws ApiError
+   */
+  public issue({
+    id,
+  }: {
+    id: string,
+  }): CancelablePromise<Issue> {
+    return this.httpRequest.request({
+      method: 'GET',
+      url: '/api/v1/backoffice/issue/{id}',
+      path: {
+        'id': id,
+      },
+      errors: {
+        422: `Validation Error`,
+      },
+    });
+  }
+
+  /**
+   * Pledge Reward Transfer
+   * @returns BackofficeReward Successful Response
+   * @throws ApiError
+   */
+  public pledgeRewardTransfer({
+    requestBody,
+  }: {
+    requestBody: PledgeRewardTransfer,
+  }): CancelablePromise<BackofficeReward> {
+    return this.httpRequest.request({
+      method: 'POST',
+      url: '/api/v1/backoffice/pledges/approve',
+      body: requestBody,
+      mediaType: 'application/json',
+      errors: {
+        422: `Validation Error`,
+      },
+    });
+  }
+
+  /**
    * Pledge Mark Pending
-   * @returns BackofficePledgeRead Successful Response
+   * @returns BackofficePledge Successful Response
    * @throws ApiError
    */
   public pledgeMarkPending({
     pledgeId,
   }: {
     pledgeId: string,
-  }): CancelablePromise<BackofficePledgeRead> {
+  }): CancelablePromise<BackofficePledge> {
     return this.httpRequest.request({
       method: 'POST',
       url: '/api/v1/backoffice/pledges/mark_pending/{pledge_id}',
@@ -85,14 +130,14 @@ export class BackofficeService {
 
   /**
    * Pledge Mark Disputed
-   * @returns BackofficePledgeRead Successful Response
+   * @returns BackofficePledge Successful Response
    * @throws ApiError
    */
   public pledgeMarkDisputed({
     pledgeId,
   }: {
     pledgeId: string,
-  }): CancelablePromise<BackofficePledgeRead> {
+  }): CancelablePromise<BackofficePledge> {
     return this.httpRequest.request({
       method: 'POST',
       url: '/api/v1/backoffice/pledges/mark_disputed/{pledge_id}',
@@ -102,39 +147,6 @@ export class BackofficeService {
       errors: {
         422: `Validation Error`,
       },
-    });
-  }
-
-  /**
-   * Invites Create Code
-   * @returns InviteRead Successful Response
-   * @throws ApiError
-   */
-  public invitesCreateCode({
-    requestBody,
-  }: {
-    requestBody: InviteCreate,
-  }): CancelablePromise<InviteRead> {
-    return this.httpRequest.request({
-      method: 'POST',
-      url: '/api/v1/backoffice/invites/create_code',
-      body: requestBody,
-      mediaType: 'application/json',
-      errors: {
-        422: `Validation Error`,
-      },
-    });
-  }
-
-  /**
-   * Invites List
-   * @returns InviteRead Successful Response
-   * @throws ApiError
-   */
-  public invitesList(): CancelablePromise<Array<InviteRead>> {
-    return this.httpRequest.request({
-      method: 'POST',
-      url: '/api/v1/backoffice/invites/list',
     });
   }
 

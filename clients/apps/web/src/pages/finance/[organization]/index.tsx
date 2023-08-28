@@ -1,54 +1,41 @@
 import Gatekeeper from '@/components/Dashboard/Gatekeeper/Gatekeeper'
-import Finance from '@/components/Finance/Finance'
-import DashboardLayout from '@/components/Layout/DashboardLayout'
-import type { NextLayoutComponentType } from 'next'
-import Head from 'next/head'
+import LoadingScreen from '@/components/Dashboard/LoadingScreen'
+import { NextLayoutComponentType } from 'next'
 import { useRouter } from 'next/router'
-import {
-  useListPledgesForOrganization,
-  useOrganizationAccounts,
-} from 'polarkit/hooks'
 import { ReactElement, useEffect } from 'react'
 import { useCurrentOrgAndRepoFromURL } from '../../../hooks'
 
+/**
+ * TODO: Delete me in October, 2023
+ *
+ * I used to be a route, now I'm a mere redirect.
+ * You can remove me ~1 month from now to clean up the codebase.
+ */
 const Page: NextLayoutComponentType = () => {
   const router = useRouter()
   const { org, isLoaded } = useCurrentOrgAndRepoFromURL()
 
   useEffect(() => {
-    if (isLoaded && !org) {
-      router.push('/dashboard')
+    if (!isLoaded) return
+    if (org) {
+      router.push(`/maintainer/${org.name}/finance`)
       return
     }
+    router.push(`/maintainer`)
+    return
   }, [isLoaded, org, router])
-
-  const pledges = useListPledgesForOrganization(org?.platform, org?.name)
-
-  const accounts = useOrganizationAccounts(org?.name)
 
   return (
     <>
-      <Head>
-        <title>Polar{org ? ` ${org.name}` : ''}</title>
-      </Head>
-      {org && pledges.data && accounts.data && (
-        <Finance
-          pledges={pledges.data}
-          org={org}
-          tab="current"
-          accounts={accounts.data}
-        />
-      )}
+      <LoadingScreen>
+        <>Redirecting...</>
+      </LoadingScreen>
     </>
   )
 }
 
 Page.getLayout = (page: ReactElement) => {
-  return (
-    <Gatekeeper>
-      <DashboardLayout showSidebar={true}>{page}</DashboardLayout>
-    </Gatekeeper>
-  )
+  return <Gatekeeper>{page}</Gatekeeper>
 }
 
 export default Page

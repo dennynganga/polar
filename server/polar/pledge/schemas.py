@@ -7,7 +7,7 @@ from uuid import UUID
 from pydantic import Field
 
 from polar.currency.schemas import CurrencyAmount
-from polar.issue.schemas import Issue, IssueRead
+from polar.issue.schemas import Issue
 from polar.kit.schemas import Schema
 from polar.models.pledge import Pledge as PledgeModel
 from polar.organization.schemas import Organization
@@ -22,10 +22,9 @@ class PledgeState(str, Enum):
     created = "created"
     # The issue has been closed, awaiting maintainer to confirm the issue is fixed.
     confirmation_pending = "confirmation_pending"
-    # The fix was confirmed, but the pledge has not been paid.
+    # The fix was confirmed, and rewards have been created.
+    # See issue rewards to track payment status.
     pending = "pending"
-    # The pledge has been paid out to the maintainer.
-    paid = "paid"
     # The pledge was refunded in full before being paid out.
     refunded = "refunded"
     # The pledge was disputed by the customer (via Polar)
@@ -40,12 +39,11 @@ class PledgeState(str, Enum):
             cls.created,
             cls.confirmation_pending,
             cls.pending,
-            cls.paid,
             cls.disputed,
         ]
 
     # Happy path:
-    # initiated -> created -> confirmation_pending -> pending -> paid
+    # initiated -> created -> confirmation_pending -> pending
 
     @classmethod
     def to_created_states(cls) -> list[PledgeState]:
@@ -94,6 +92,12 @@ class PledgeState(str, Enum):
         return PledgeState.__members__[s]
 
 
+class Pledger(Schema):
+    name: str
+    github_username: str | None
+    avatar_url: str | None
+
+
 # Public API
 class Pledge(Schema):
     id: UUID = Field(description="Pledge ID")
@@ -101,29 +105,47 @@ class Pledge(Schema):
     amount: CurrencyAmount = Field(description="Amount pledged towards the issue")
     state: PledgeState = Field(description="Current state of the pledge")
 
-    paid_at: datetime | None = Field(
-        description="If and when the pledge was paid to the maintainer."
-    )
     refunded_at: datetime | None = Field(
         description="If and when the pledge was refunded to the pledger"
     )  # noqa: E501
+
     scheduled_payout_at: datetime | None = Field(
         description="When the payout is scheduled to be made to the maintainers behind the issue. Disputes must be made before this date."  # noqa: E501
     )
 
     issue: Issue = Field(description="The issue that the pledge was made towards")
 
+    pledger: Pledger | None = Field(
+        description="The user or organization that made this pledge"
+    )
+
     @classmethod
     def from_db(cls, o: PledgeModel) -> Pledge:
+        pledger: Pledger | None = None
+
+        if o.by_organization_id:
+            pledger = Pledger(
+                name=o.by_organization.pretty_name or o.by_organization.name,
+                github_username=o.by_organization.name,
+                avatar_url=o.by_organization.avatar_url,
+            )
+
+        if o.by_user_id:
+            pledger = Pledger(
+                name=o.user.username,
+                github_username=o.user.username,
+                avatar_url=o.user.avatar_url,
+            )
+
         return Pledge(
             id=o.id,
             created_at=o.created_at,
             amount=CurrencyAmount(currency="USD", amount=o.amount),
             state=PledgeState.from_str(o.state),
-            paid_at=o.paid_at,
             refunded_at=o.refunded_at,
             scheduled_payout_at=o.scheduled_payout_at,
             issue=Issue.from_db(o.issue),
+            pledger=pledger,
         )
 
 
@@ -171,6 +193,8 @@ class PledgeRead(Schema):
     repository_id: UUID
     organization_id: UUID
 
+    pledger_user_id: UUID | None = None
+
     state: PledgeState
 
     pledger_name: str | None
@@ -209,6 +233,7 @@ class PledgeRead(Schema):
             pledger_name=pledger_name,
             pledger_avatar=pledger_avatar,
             scheduled_payout_at=o.scheduled_payout_at,
+            pledger_user_id=o.by_user_id,
         )
 
 

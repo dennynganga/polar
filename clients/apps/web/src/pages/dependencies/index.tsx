@@ -1,59 +1,21 @@
-import Dashboard from '@/components/Dashboard'
 import Gatekeeper from '@/components/Dashboard/Gatekeeper/Gatekeeper'
-import OnboardingConnectReposToGetStarted from '@/components/Onboarding/OnboardingConnectReposToGetStarted'
 import type { NextLayoutComponentType } from 'next'
 import { useRouter } from 'next/router'
-import { useListOrganizations, useListPersonalPledges } from 'polarkit/hooks'
 import { ReactElement, useEffect } from 'react'
-import { useCurrentOrgAndRepoFromURL } from '../../hooks'
 
+/**
+ * TODO: Delete me in October, 2023
+ *
+ * I used to be a route, now I'm a mere redirect.
+ * You can remove me ~1 month from now to clean up the codebase.
+ */
 const Page: NextLayoutComponentType = () => {
-  const { isLoaded, haveOrgs } = useCurrentOrgAndRepoFromURL()
-
-  const listOrganizationsQuery = useListOrganizations()
-  const personalPledges = useListPersonalPledges()
-
   const router = useRouter()
 
   useEffect(() => {
-    const havePersonalPledges =
-      (personalPledges?.data && personalPledges?.data.length > 0) || false
-
-    // Show personal dashboard
-    if (!haveOrgs && havePersonalPledges) {
-      router.push(`/dependencies/personal`)
-      return
-    }
-
-    // redirect to first org
-    if (
-      haveOrgs &&
-      listOrganizationsQuery?.data?.items &&
-      listOrganizationsQuery.data.items.length > 0
-    ) {
-      const gotoOrg = listOrganizationsQuery.data.items[0]
-      router.push(`/dependencies/${gotoOrg.name}`)
-      return
-    }
-  })
-
-  if (!isLoaded) {
-    return <></>
-  }
-
-  if (!haveOrgs) {
-    return <OnboardingConnectReposToGetStarted />
-  }
-
-  return (
-    <Dashboard
-      key="dashboard-root"
-      org={undefined}
-      repo={undefined}
-      isPersonal={false}
-      isDependencies={true}
-    />
-  )
+    router.push(`/feed`)
+  }, [router])
+  return <></>
 }
 
 Page.getLayout = (page: ReactElement) => {

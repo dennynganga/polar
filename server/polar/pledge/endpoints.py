@@ -1,13 +1,12 @@
-from typing import Sequence
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import Field
 
 from polar.auth.dependencies import Auth
+from polar.authz.service import AccessType, Authz
 from polar.enums import Platforms
 from polar.exceptions import NotPermitted, ResourceNotFound, StripeError
-from polar.issue.schemas import Issue, IssueRead
+from polar.issue.schemas import Issue
 from polar.models import Pledge, Repository
 from polar.organization.schemas import Organization
 from polar.organization.service import organization as organization_service
@@ -15,21 +14,20 @@ from polar.postgres import AsyncSession, get_db_session
 from polar.repository.schemas import Repository as RepositorySchema
 from polar.repository.service import repository as repository_service
 from polar.tags.api import Tags
-from polar.types import ListResource
+from polar.types import ListResource, Pagination
 from polar.user_organization.service import (
     user_organization as user_organization_service,
 )
 
 from .schemas import (
-    ConfirmPledgesResponse,
+    Pledge as PledgeSchema,
+)
+from .schemas import (
     PledgeCreate,
     PledgeMutationResponse,
     PledgeRead,
     PledgeResources,
     PledgeUpdate,
-)
-from .schemas import (
-    Pledge as PledgeSchema,
 )
 from .service import pledge as pledge_service
 
@@ -60,39 +58,59 @@ async def search(
         example="my-repo",
         description="Search pledges in the repository with this name. Can only be used if organization_name is set.",  # noqa: E501
     ),
+    issue_id: UUID
+    | None = Query(default=None, description="Search pledges to this issue"),
     session: AsyncSession = Depends(get_db_session),
     auth: Auth = Depends(Auth.current_user),
+    authz: Authz = Depends(Authz.authz),
 ) -> ListResource[PledgeSchema]:
-    if not platform:
-        raise HTTPException(
-            status_code=400,
-            detail="platform is not set",
+    list_by_orgs: list[UUID] = []
+    list_by_repos: list[UUID] = []
+    list_by_issues: list[UUID] = []
+
+    if organization_name:
+        if not platform:
+            raise HTTPException(
+                status_code=400,
+                detail="platform is not set",
+            )
+
+        if not platform:
+            raise HTTPException(
+                status_code=400,
+                detail="platform is not set",
+            )
+
+        if not organization_name:
+            raise HTTPException(
+                status_code=400,
+                detail="organization_name is not set",
+            )
+
+        # get org
+        org = await organization_service.get_by_name(
+            session,
+            platform=Platforms.github,
+            name=organization_name,
         )
 
-    if not organization_name:
-        raise HTTPException(
-            status_code=400,
-            detail="organization_name is not set",
-        )
+        if not org:
+            raise HTTPException(
+                status_code=404,
+                detail="organization not found",
+            )
 
-    # get org
-    org = await organization_service.get_by_name(
-        session,
-        platform=Platforms.github,
-        name=organization_name,
-    )
-
-    if not org:
-        raise HTTPException(
-            status_code=404,
-            detail="organization not found",
-        )
-
-    repository_ids = []
+        list_by_orgs = [org.id]
 
     if repository_name:
+        if len(list_by_orgs) != 1:
+            raise HTTPException(
+                status_code=404,
+                detail="organization not set",
+            )
+
         repo = await repository_service.get_by_org_and_name(
-            session, organization_id=org.id, name=repository_name
+            session, organization_id=list_by_orgs[0], name=repository_name
         )
 
         if not repo:
@@ -101,33 +119,32 @@ async def search(
                 detail="repository not found",
             )
 
-        repository_ids = [repo.id]
+        list_by_repos = [repo.id]
 
-    else:
-        repos = await repository_service.list_by(session, org_ids=[org.id])
-        repository_ids = [r.id for r in repos]
+    if issue_id:
+        list_by_issues = [issue_id]
+
+    if len(list_by_orgs) == 0 and len(list_by_repos) == 0 and len(list_by_issues) == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="No search criteria specified",
+        )
 
     pledges = await pledge_service.list_by(
         session=session,
-        organization_ids=[org.id],
-        repository_ids=repository_ids,
+        organization_ids=list_by_orgs,
+        repository_ids=list_by_repos,
+        issue_ids=list_by_issues,
         load_issue=True,
     )
 
-    user_memberships = await user_organization_service.list_by_user_id(
-        session,
-        auth.user.id,
-    )
+    items = [
+        PledgeSchema.from_db(p)
+        for p in pledges
+        if await authz.can(auth.subject, AccessType.read, p)
+    ]
 
-    return ListResource(
-        items=[
-            PledgeSchema.from_db(p)
-            for p in pledges
-            if pledge_service.user_can_read_pledge(
-                auth.user, p, user_memberships
-            )  # Authorization
-        ]
-    )
+    return ListResource(items=items, pagination=Pagination(total_count=len(items)))
 
 
 @router.get(
@@ -142,6 +159,7 @@ async def get(
     id: UUID,
     session: AsyncSession = Depends(get_db_session),
     auth: Auth = Depends(Auth.current_user),
+    authz: Authz = Depends(Authz.authz),
 ) -> PledgeSchema:
     pledge = await pledge_service.get_with_loaded(session, id)
     if not pledge:
@@ -150,12 +168,7 @@ async def get(
             detail="Pledge not found",
         )
 
-    user_memberships = await user_organization_service.list_by_user_id(
-        session,
-        auth.user.id,
-    )
-
-    if not pledge_service.user_can_read_pledge(auth.user, pledge, user_memberships):
+    if not await authz.can(auth.subject, AccessType.read, pledge):
         raise HTTPException(
             status_code=403,
             detail="Access denied",
@@ -308,17 +321,13 @@ async def get_pledge(
     pledge_id: UUID,
     session: AsyncSession = Depends(get_db_session),
     auth: Auth = Depends(Auth.current_user),
+    authz: Authz = Depends(Authz.authz),
 ) -> PledgeRead:
     pledge = await pledge_service.get_with_loaded(session, pledge_id)
     if not pledge:
         raise HTTPException(status_code=404, detail="Pledge not found")
 
-    user_memberships = await user_organization_service.list_by_user_id(
-        session,
-        auth.user.id,
-    )
-
-    if not pledge_service.user_can_read_pledge(auth.user, pledge, user_memberships):
+    if not await authz.can(auth.subject, AccessType.read, pledge):
         raise HTTPException(
             status_code=403,
             detail="Access denied",
@@ -366,6 +375,9 @@ async def list_personal_pledges(
     auth: Auth = Depends(Auth.current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[PledgeRead]:
+    if not auth.user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
     pledges = await pledge_service.list_by_pledging_user(session, auth.user.id)
     return [PledgeRead.from_db(p) for p in pledges]
 
@@ -395,47 +407,6 @@ async def list_organization_pledges(
 
 
 @router.post(
-    "/{platform}/{org_name}/{repo_name}/issues/{number}/confirm_pledges",
-    response_model=ConfirmPledgesResponse,
-)
-async def confirm_pledges(
-    platform: Platforms,
-    org_name: str,
-    repo_name: str,
-    number: int,
-    auth: Auth = Depends(Auth.current_user),
-    session: AsyncSession = Depends(get_db_session),
-) -> ConfirmPledgesResponse:
-    org, repo, issue = await organization_service.get_with_repo_and_issue(
-        session=session,
-        platform=platform,
-        org_name=org_name,
-        repo_name=repo_name,
-        issue=number,
-    )
-
-    user_memberships = await user_organization_service.list_by_user_id(
-        session,
-        auth.user.id,
-    )
-
-    if not pledge_service.user_can_admin_received_pledge_on_issue(
-        issue, user_memberships
-    ):
-        raise HTTPException(
-            status_code=403,
-            detail="Access denied",
-        )
-
-    await pledge_service.mark_pending_by_issue_id(
-        session,
-        issue_id=issue.id,
-    )
-
-    return ConfirmPledgesResponse()
-
-
-@router.post(
     "/pledges/{pledge_id}/dispute",
     response_model=PledgeRead,
 )
@@ -445,6 +416,9 @@ async def dispute_pledge(
     auth: Auth = Depends(Auth.current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> PledgeRead:
+    if not auth.user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
     pledge = await pledge_service.get(session, pledge_id)
     if not pledge:
         raise HTTPException(status_code=404, detail="Pledge not found")

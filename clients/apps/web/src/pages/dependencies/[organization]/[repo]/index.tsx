@@ -1,50 +1,37 @@
-import Dashboard from '@/components/Dashboard'
 import Gatekeeper from '@/components/Dashboard/Gatekeeper/Gatekeeper'
-import type { NextLayoutComponentType } from 'next'
-import Head from 'next/head'
+import LoadingScreen from '@/components/Dashboard/LoadingScreen'
+import Layout from '@/components/Layout/EmptyLayout'
+import type { NextPageWithLayout } from '@/utils/next'
 import { useRouter } from 'next/router'
 import { ReactElement, useEffect } from 'react'
-import { useCurrentOrgAndRepoFromURL } from '../../../../hooks'
 
-const Page: NextLayoutComponentType = () => {
+/**
+ * TODO: Delete me in October, 2023
+ *
+ * I used to be a route, now I'm a mere redirect.
+ * You can remove me ~1 month from now to clean up the codebase.
+ */
+const Page: NextPageWithLayout = () => {
   const router = useRouter()
-  const { organization: orgSlug, repo: repoSlug } = router.query
-  const key = `orgrepo-${orgSlug}-${repoSlug}` // use key to force reload of state
-  const { org, repo, isLoaded } = useCurrentOrgAndRepoFromURL()
-
   useEffect(() => {
-    if (isLoaded && !org && !repo) {
-      router.push('/dependencies')
-      return
-    }
-    if (isLoaded && org && !repo) {
-      router.push(`/dependencies/${org.name}`)
-      return
-    }
-  }, [isLoaded, org, repo, router])
-
-  if (!isLoaded) {
-    return <></>
-  }
+    router.push(`/feed`)
+  }, [router])
 
   return (
     <>
-      <Head>
-        <title>Polar{org && repo ? ` ${org.name}/${repo.name}` : ''}</title>
-      </Head>
-      <Dashboard
-        key={key}
-        org={org}
-        repo={repo}
-        isPersonal={false}
-        isDependencies={true}
-      />
+      <LoadingScreen>
+        <>Redirecting...</>
+      </LoadingScreen>
     </>
   )
 }
 
 Page.getLayout = (page: ReactElement) => {
-  return <Gatekeeper>{page}</Gatekeeper>
+  return (
+    <Gatekeeper>
+      <Layout>{page}</Layout>
+    </Gatekeeper>
+  )
 }
 
 export default Page

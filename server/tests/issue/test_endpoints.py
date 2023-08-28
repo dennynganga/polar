@@ -7,8 +7,11 @@ from polar.config import settings
 from polar.issue.schemas import Reactions
 from polar.models.issue import Issue
 from polar.models.organization import Organization
+from polar.models.pledge import Pledge
 from polar.models.repository import Repository
 from polar.models.user_organization import UserOrganization
+from polar.pledge.schemas import PledgeState
+from polar.pledge.service import pledge as pledge_service
 from polar.postgres import AsyncSession
 
 
@@ -259,3 +262,69 @@ async def test_update_funding_goal(
         "currency": "USD",
         "amount": 12000,
     }
+
+
+@pytest.mark.asyncio
+async def test_confirm_solved(
+    organization: Organization,
+    repository: Repository,
+    issue: Issue,
+    auth_jwt: str,
+    pledge: Pledge,
+    session: AsyncSession,
+    user_organization: UserOrganization,  # makes User a member of Organization
+) -> None:
+    user_organization.is_admin = True
+    await user_organization.save(session)
+
+    await pledge_service.mark_confirmation_pending_by_issue_id(session, issue.id)
+
+    # fetch pledges
+    async with AsyncClient(app=app, base_url="http://test") as ac:
+        pledges_response = await ac.get(
+            f"/api/v1/pledges/search?issue_id={pledge.issue_id}",
+            cookies={settings.AUTH_COOKIE_KEY: auth_jwt},
+        )
+
+    print(pledges_response.text)
+
+    assert pledges_response.status_code == 200
+    assert len(pledges_response.json()["items"]) == 1
+    assert pledges_response.json()["items"][0]["state"] == "confirmation_pending"
+
+    # confirm as solved
+    async with AsyncClient(app=app, base_url="http://test") as ac:
+        response = await ac.post(
+            f"/api/v1/issues/{issue.id}/confirm_solved",
+            json={
+                "splits": [
+                    {
+                        "github_username": "zegl",
+                        "share_thousands": 300,
+                    },
+                    {
+                        "organization_id": str(organization.id),
+                        "share_thousands": 700,
+                    },
+                ]
+            },
+            cookies={settings.AUTH_COOKIE_KEY: auth_jwt},
+        )
+
+    print(response.text)
+
+    assert response.status_code == 200
+    assert response.json()["id"] == str(issue.id)
+
+    # fetch pledges
+    async with AsyncClient(app=app, base_url="http://test") as ac:
+        pledges_response = await ac.get(
+            f"/api/v1/pledges/search?issue_id={pledge.issue_id}",
+            cookies={settings.AUTH_COOKIE_KEY: auth_jwt},
+        )
+
+    print(pledges_response.text)
+
+    assert pledges_response.status_code == 200
+    assert len(pledges_response.json()["items"]) == 1
+    assert pledges_response.json()["items"][0]["state"] == "pending"

@@ -4,6 +4,7 @@
 
 import type { CurrencyAmount } from './CurrencyAmount';
 import type { Issue } from './Issue';
+import type { Pledger } from './Pledger';
 import type { PledgeState } from './PledgeState';
 
 export type Pledge = {
@@ -24,10 +25,6 @@ export type Pledge = {
    */
   state: PledgeState;
   /**
-   * If and when the pledge was paid to the maintainer.
-   */
-  paid_at?: string;
-  /**
    * If and when the pledge was refunded to the pledger
    */
   refunded_at?: string;
@@ -39,5 +36,9 @@ export type Pledge = {
    * The issue that the pledge was made towards
    */
   issue: Issue;
+  /**
+   * The user or organization that made this pledge
+   */
+  pledger?: Pledger;
 };
 

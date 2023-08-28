@@ -1,17 +1,15 @@
-from uuid import UUID
 from enum import Enum
-from typing import TYPE_CHECKING, Any
+from typing import Any
+from uuid import UUID
 
-from sqlalchemy import Boolean, ForeignKey, String, UniqueConstraint
+from sqlalchemy import Boolean, ForeignKey, String
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from polar.enums import AccountType
 from polar.kit.db.models import RecordModel
 from polar.kit.extensions.sqlalchemy import PostgresUUID, StringEnum
-
-if TYPE_CHECKING:  # pragma: no cover
-    from polar.models.organization import Organization
+from polar.models.organization import Organization
 
 
 class Account(RecordModel):
@@ -20,16 +18,17 @@ class Account(RecordModel):
         ONBOARDING_STARTED = "onboarding_started"
 
     __tablename__ = "accounts"
-    __table_args__ = (
-        UniqueConstraint("organization_id"),
-        UniqueConstraint("stripe_id"),
-    )
 
     account_type: Mapped[AccountType] = mapped_column(String(255), nullable=False)
 
-    organization_id: Mapped[UUID] = mapped_column(
-        PostgresUUID, ForeignKey("organizations.id"), unique=True
+    organization_id: Mapped[UUID | None] = mapped_column(
+        PostgresUUID, ForeignKey("organizations.id"), unique=True, nullable=True
     )
+
+    user_id: Mapped[UUID | None] = mapped_column(
+        PostgresUUID, ForeignKey("users.id"), unique=True, nullable=True
+    )
+
     admin_id: Mapped[UUID] = mapped_column(PostgresUUID, ForeignKey("users.id"))
 
     stripe_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
@@ -52,8 +51,8 @@ class Account(RecordModel):
 
     data: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
 
-    organization: "Mapped[Organization]" = relationship(
-        "Organization", back_populates="account"
+    organization: Mapped[Organization | None] = relationship(
+        "Organization", foreign_keys=[organization_id]
     )
 
     __mutables__ = {

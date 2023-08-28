@@ -1,4 +1,4 @@
-from typing import Any, Literal, Optional, Tuple
+from typing import Literal, Optional, Tuple
 from uuid import UUID
 
 import structlog
@@ -28,11 +28,13 @@ from polar.organization.endpoints import OrganizationPrivateRead
 from polar.pledge.service import pledge as pledge_service
 from polar.postgres import AsyncSession, get_db_session
 from polar.posthog import posthog
+from polar.reward.service import reward_service
 from polar.worker import enqueue_job
 
 from .schemas import (
     AuthorizationResponse,
     GithubBadgeRead,
+    GithubUser,
     OAuthAccessToken,
 )
 from .service.issue import github_issue
@@ -116,6 +118,9 @@ async def github_callback(
     if pledge_id:
         await pledge_service.connect_backer(session, pledge_id=pledge_id, backer=user)
 
+    # connect dangling rewards
+    await reward_service.connect_by_username(session, user)
+
     posthog.identify(user)
     goto_url = state_data.get("goto_url", None)
     return AuthService.generate_login_cookie_response(
@@ -184,6 +189,31 @@ async def get_badge_settings(
     return badge
 
 
+class LookupUserRequest(BaseModel):
+    username: str
+
+
+@router.post("/lookup_user", response_model=GithubUser)
+async def lookup_user(
+    body: LookupUserRequest,
+    session: AsyncSession = Depends(get_db_session),
+    auth: Auth = Depends(Auth.current_user),
+) -> GithubUser:
+    if not auth.user:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    try:
+        client = await github.get_user_client(session, auth.user)
+        github_user = client.rest.users.get_by_username(username=body.username)
+    except Exception:
+        raise HTTPException(status_code=404, detail="user not found")
+
+    return GithubUser(
+        username=github_user.parsed_data.login,
+        avatar_url=github_user.parsed_data.avatar_url,
+    )
+
+
 ###############################################################################
 # INSTALLATIONS
 ###############################################################################
@@ -200,6 +230,9 @@ async def install(
     session: AsyncSession = Depends(get_db_session),
     auth: Auth = Depends(Auth.current_user),
 ) -> Organization | None:
+    if not auth.user:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
     with ExecutionContext(is_during_installation=True):
         organization = await github_organization.install(
             session, auth.user, installation_id=installation.external_id

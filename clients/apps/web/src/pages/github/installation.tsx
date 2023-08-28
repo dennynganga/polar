@@ -26,7 +26,7 @@ const GithubInstallationPage: NextPageWithLayout = () => {
   const [showLogin, setShowLogin] = useState(false)
 
   const redirectToDashboard = () => {
-    router.push('/issues')
+    router.push('/maintainer')
     return
   }
 
@@ -81,7 +81,7 @@ const GithubInstallationPage: NextPageWithLayout = () => {
   }, [])
 
   if (installed) {
-    router.replace(`/dashboard/initialize/${installed.name}`)
+    router.replace(`/maintainer/${installed.name}/initialize`)
     return <></>
   }
 
@@ -96,6 +96,7 @@ const GithubInstallationPage: NextPageWithLayout = () => {
               posthogProps={{
                 view: 'Github Installation Page',
               }}
+              text="Continue with Github"
             />
           )}
         </div>

@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 from citext import CIText
-from sqlalchemy import TIMESTAMP, BigInteger, Boolean, Integer, String, UniqueConstraint
+from sqlalchemy import TIMESTAMP, Boolean, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from polar.config import settings
@@ -13,9 +13,7 @@ from polar.kit.db.models import RecordModel
 from polar.kit.extensions.sqlalchemy import PostgresUUID, StringEnum
 
 if TYPE_CHECKING:  # pragma: no cover
-    from polar.models.account import Account
     from polar.models.repository import Repository
-    from polar.models.user import User
 
 
 class Organization(RecordModel):
@@ -77,19 +75,6 @@ class Organization(RecordModel):
     )
 
     onboarded_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
-
-    users: "Mapped[User]" = relationship(
-        "UserOrganization",
-        back_populates="organization",
-        lazy="raise_on_sql",
-    )
-
-    account: "Mapped[Account | None]" = relationship(
-        "Account",
-        back_populates="organization",
-        uselist=False,
-        lazy="raise",
-    )
 
     stripe_customer_id: Mapped[str | None] = mapped_column(
         String(length=50), nullable=True, unique=True, default=None

@@ -9,7 +9,6 @@ from githubkit.exception import RequestFailed
 from polar.enums import Platforms
 from polar.exceptions import ResourceNotFound
 from polar.issue.schemas import IssueCreate
-from polar.kit.utils import utc_now
 from polar.models import Organization, User
 from polar.models.issue import Issue
 from polar.models.repository import Repository
@@ -216,6 +215,8 @@ class GithubOrganizationService(OrganizationService):
             except RequestFailed as e:
                 if e.response.status_code == 404:
                     raise ResourceNotFound()
+                if e.response.status_code == 401:
+                    raise ResourceNotFound()
                 # re-raise other status codes
                 raise e
 
@@ -315,6 +316,17 @@ class GithubOrganizationService(OrganizationService):
                 raise e
 
             github_issue_data = issue_response.parsed_data
+
+            # This issue is a pull request, reject syncing it
+            if github_issue_data.pull_request:
+                log.info(
+                    "issue is pull request, skipping",
+                    organization_id=organization.id,
+                    repository_id=repository.id,
+                    number=issue_number,
+                )
+                raise ResourceNotFound()
+
             issue_schema = IssueCreate.from_github(
                 github_issue_data,
                 organization_id=organization.id,

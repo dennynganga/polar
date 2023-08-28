@@ -1,42 +1,57 @@
 from __future__ import annotations
 
 import datetime
-import math
 from datetime import timedelta
 from typing import List, Sequence
 from uuid import UUID
 
 import stripe.error as stripe_lib_error
 import structlog
+from discord_webhook import AsyncDiscordWebhook, DiscordEmbed
 from sqlalchemy.orm import (
     joinedload,
 )
 
 from polar.account.service import account as account_service
-from polar.enums import Platforms
+from polar.config import settings
 from polar.exceptions import NotPermitted, ResourceNotFound, StripeError
+from polar.integrations.github.service.user import github_user as github_user_service
 from polar.integrations.stripe.service import stripe
+from polar.issue.schemas import ConfirmIssueSplit
+from polar.issue.service import issue as issue_service
 from polar.kit.hook import Hook
 from polar.kit.services import ResourceServiceReader
 from polar.kit.utils import utc_now
+from polar.models.account import Account
 from polar.models.issue import Issue
+from polar.models.issue_reward import IssueReward
 from polar.models.organization import Organization
 from polar.models.pledge import Pledge
 from polar.models.pledge_transaction import PledgeTransaction
 from polar.models.repository import Repository
 from polar.models.user import User
 from polar.models.user_organization import UserOrganization
+from polar.notifications.notification import (
+    MaintainerPledgedIssueConfirmationPendingNotification,
+    MaintainerPledgedIssuePendingNotification,
+    PledgerPledgePendingNotification,
+    RewardPaidNotification,
+)
+from polar.notifications.service import (
+    PartialNotification,
+    get_cents_in_dollar_string,
+)
+from polar.notifications.service import (
+    notifications as notification_service,
+)
 from polar.organization.service import organization as organization_service
 from polar.postgres import AsyncSession, sql
+from polar.repository.service import repository as repository_service
 
 from .hooks import (
     PledgeHook,
-    PledgePaidHook,
-    pledge_confirmation_pending,
     pledge_created,
     pledge_disputed,
-    pledge_paid,
-    pledge_pending,
     pledge_updated,
 )
 from .schemas import (
@@ -76,6 +91,7 @@ class PledgeService(ResourceServiceReader[Pledge]):
         session: AsyncSession,
         organization_ids: list[UUID] | None = None,
         repository_ids: list[UUID] | None = None,
+        issue_ids: list[UUID] | None = None,
         pledging_user: UUID | None = None,
         load_issue: bool = False,
     ) -> Sequence[Pledge]:
@@ -98,6 +114,9 @@ class PledgeService(ResourceServiceReader[Pledge]):
 
         if pledging_user:
             statement = statement.where(Pledge.by_user_id == pledging_user)
+
+        if issue_ids:
+            statement = statement.where(Pledge.issue_id.in_(issue_ids))
 
         if load_issue:
             statement = statement.options(
@@ -277,11 +296,6 @@ class PledgeService(ResourceServiceReader[Pledge]):
         ret = PledgeMutationResponse.from_orm(db_pledge)
         ret.client_secret = payment_intent.client_secret
 
-        # User pledged, allow into the beta!
-        if not user.invite_only_approved:
-            user.invite_only_approved = True
-            await user.save(session)
-
         return ret
 
     async def create_pledge_as_org(
@@ -413,9 +427,12 @@ class PledgeService(ResourceServiceReader[Pledge]):
     def calculate_fee(self, amount: int) -> int:
         # 2.9% + potentially 1.5% for international cards plus a fixed fee of 30 cents
         # See https://support.stripe.com/questions/passing-the-stripe-fee-on-to-customers
-        fee_percentage = 0.029 + 0.015
-        fee_fixed = 30
-        return math.ceil((amount + fee_fixed) / (1 - fee_percentage)) - amount
+        # fee_percentage = 0.029 + 0.015
+        # fee_fixed = 30
+        # return math.ceil((amount + fee_fixed) / (1 - fee_percentage)) - amount
+
+        # Running free service fees for a bit
+        return 0
 
     async def connect_backer(
         self,
@@ -430,10 +447,6 @@ class PledgeService(ResourceServiceReader[Pledge]):
         pledge.by_user_id = backer.id
         await pledge.save(session)
 
-        # Approve the user for the alpha!
-        backer.invite_only_approved = True
-        await backer.save(session)
-
     async def transition_by_issue_id(
         self,
         session: AsyncSession,
@@ -441,7 +454,7 @@ class PledgeService(ResourceServiceReader[Pledge]):
         from_states: list[PledgeState],
         to_state: PledgeState,
         hook: Hook[PledgeHook] | None = None,
-    ) -> None:
+    ) -> bool:
         get = sql.select(Pledge).where(
             Pledge.issue_id == issue_id,
             Pledge.state.in_(from_states),
@@ -471,15 +484,63 @@ class PledgeService(ResourceServiceReader[Pledge]):
             if hook:
                 await hook.call(PledgeHook(session, pledge))
 
+        if len(pledges) > 0:
+            return True
+        return False
+
     async def mark_confirmation_pending_by_issue_id(
         self, session: AsyncSession, issue_id: UUID
     ) -> None:
-        await self.transition_by_issue_id(
+        any_changed = await self.transition_by_issue_id(
             session,
             issue_id,
             from_states=PledgeState.to_confirmation_pending_states(),
             to_state=PledgeState.confirmation_pending,
-            hook=pledge_confirmation_pending,
+        )
+
+        if any_changed:
+            await self.pledge_confirmation_pending_notifications(session, issue_id)
+
+    async def pledge_confirmation_pending_notifications(
+        self, session: AsyncSession, issue_id: UUID
+    ) -> None:
+        pledges = await self.list_by(session, issue_ids=[issue_id])
+
+        # This issue doesn't have any pledges, don't send any notifications
+        if len(pledges) == 0:
+            return
+
+        issue = await issue_service.get(session, issue_id)
+        if not issue:
+            raise Exception("issue not found")
+
+        org = await organization_service.get(session, issue.organization_id)
+        if not org:
+            raise Exception("org not found")
+
+        repo = await repository_service.get(session, issue.repository_id)
+        if not repo:
+            raise Exception("repo not found")
+
+        org_account: Account | None = await account_service.get_by_org(session, org.id)
+
+        pledge_amount_sum = sum([p.amount for p in pledges])
+
+        n = MaintainerPledgedIssueConfirmationPendingNotification(
+            pledge_amount_sum=get_cents_in_dollar_string(pledge_amount_sum),
+            issue_url=f"https://github.com/{org.name}/{repo.name}/issues/{issue.number}",
+            issue_title=issue.title,
+            issue_org_name=org.name,
+            issue_repo_name=repo.name,
+            issue_number=issue.number,
+            maintainer_has_account=True if org_account else False,
+            issue_id=issue.id,
+        )
+
+        await notification_service.send_to_org(
+            session=session,
+            org_id=org.id,
+            notif=PartialNotification(issue_id=issue.id, payload=n),
         )
 
     async def mark_confirmation_pending_as_created_by_issue_id(
@@ -493,15 +554,41 @@ class PledgeService(ResourceServiceReader[Pledge]):
         )
 
     async def mark_pending_by_issue_id(
-        self, session: AsyncSession, issue_id: UUID
+        self,
+        session: AsyncSession,
+        issue_id: UUID,
     ) -> None:
-        await self.transition_by_issue_id(
+        any_changed = await self.transition_by_issue_id(
             session,
             issue_id,
             from_states=PledgeState.to_pending_states(),
             to_state=PledgeState.pending,
-            hook=pledge_pending,
         )
+
+        if any_changed:
+            await self.pledge_pending_notification(session, issue_id)
+
+    async def issue_confirmed_discord_alert(self, issue: Issue) -> None:
+        if not settings.DISCORD_WEBHOOK_URL:
+            return
+
+        webhook = AsyncDiscordWebhook(
+            url=settings.DISCORD_WEBHOOK_URL, content="Confirmed issue"
+        )
+
+        embed = DiscordEmbed(
+            title="Confirmed issue",
+            description=f'"{issue.title}" has been confirmed solved',  # noqa: E501
+            color="65280",
+        )
+
+        embed.add_embed_field(
+            name="Backoffice",
+            value=f"[Open](https://polar.sh/backoffice/issue/{str(issue.id)}",
+        )
+
+        webhook.add_embed(embed)
+        await webhook.execute()
 
     async def mark_pending_by_pledge_id(
         self, session: AsyncSession, pledge_id: UUID
@@ -529,7 +616,131 @@ class PledgeService(ResourceServiceReader[Pledge]):
         await session.commit()
 
         await pledge_updated.call(PledgeHook(session, pledge))
-        await pledge_pending.call(PledgeHook(session, pledge))
+
+        await self.pledge_pending_notification(session, pledge.issue_id)
+
+    async def pledge_pending_notification(
+        self, session: AsyncSession, issue_id: UUID
+    ) -> None:
+        pledges = await self.list_by(session, issue_ids=[issue_id])
+
+        # This issue doesn't have any pledges, don't send any notifications
+        if len(pledges) == 0:
+            return
+
+        issue = await issue_service.get(session, issue_id)
+        if not issue:
+            raise Exception("issue not found")
+
+        org = await organization_service.get(session, issue.organization_id)
+        if not org:
+            raise Exception("org not found")
+
+        repo = await repository_service.get(session, issue.repository_id)
+        if not repo:
+            raise Exception("repo not found")
+
+        org_account: Account | None = await account_service.get_by_org(session, org.id)
+
+        pledge_amount_sum = sum([p.amount for p in pledges])
+
+        n = MaintainerPledgedIssuePendingNotification(
+            pledge_amount_sum=get_cents_in_dollar_string(pledge_amount_sum),
+            issue_url=f"https://github.com/{org.name}/{repo.name}/issues/{issue.number}",
+            issue_title=issue.title,
+            issue_org_name=org.name,
+            issue_repo_name=repo.name,
+            issue_number=issue.number,
+            maintainer_has_account=True if org_account else False,
+            issue_id=issue_id,
+        )
+
+        await notification_service.send_to_org(
+            session=session,
+            org_id=org.id,
+            notif=PartialNotification(issue_id=issue_id, payload=n),
+        )
+
+        # Send to pledgers
+        for pledge in pledges:
+            pledger_notif = PledgerPledgePendingNotification(
+                pledge_amount=get_cents_in_dollar_string(pledge.amount),
+                pledge_date=pledge.created_at.strftime("%Y-%m-%d"),
+                issue_url=f"https://github.com/{org.name}/{repo.name}/issues/{issue.number}",
+                issue_title=issue.title,
+                issue_org_name=org.name,
+                issue_repo_name=repo.name,
+                issue_number=issue.number,
+                pledge_id=pledge.id,
+            )
+
+            await notification_service.send_to_pledger(
+                session,
+                pledge,
+                notif=PartialNotification(
+                    issue_id=pledge.issue_id, pledge_id=pledge.id, payload=pledger_notif
+                ),
+            )
+
+    def validate_splits(self, splits: list[ConfirmIssueSplit]) -> bool:
+        sum = 0.0
+        for s in splits:
+            sum += s.share_thousands
+
+            if s.github_username and s.organization_id:
+                return False
+
+            if not s.github_username and not s.organization_id:
+                return False
+
+        if sum != 1000:
+            return False
+
+        return True
+
+    async def create_issue_rewards(
+        self, session: AsyncSession, issue_id: UUID, splits: list[ConfirmIssueSplit]
+    ) -> list[IssueReward]:
+        if not self.validate_splits(splits):
+            raise Exception("invalid split configuration")
+
+        nested = await session.begin_nested()
+
+        stmt = sql.select(IssueReward).where(IssueReward.issue_id == issue_id)
+        res = await session.execute(stmt)
+        existing = res.scalars().unique().all()
+
+        if len(existing) > 0:
+            await nested.commit()
+            raise Exception(f"issue already has splits set: issue_id={issue_id}")
+
+        created_splits: list[IssueReward] = []
+
+        for split in splits:
+            # Associate github usernames with a user if a user with this username exists
+            user_id: UUID | None = None
+            if split.github_username:
+                user = await github_user_service.get_user_by_github_username(
+                    session, split.github_username
+                )
+                if user:
+                    user_id = user.id
+
+            s = await IssueReward.create(
+                session,
+                autocommit=False,
+                issue_id=issue_id,
+                share_thousands=split.share_thousands,
+                github_username=split.github_username,
+                organization_id=split.organization_id,
+                user_id=user_id,
+            )
+            created_splits.append(s)
+
+        await nested.commit()
+        await session.commit()
+
+        return created_splits
 
     async def mark_created_by_payment_id(
         self, session: AsyncSession, payment_id: str, amount: int, transaction_id: str
@@ -553,35 +764,6 @@ class PledgeService(ResourceServiceReader[Pledge]):
         )
         await session.commit()
         await pledge_created.call(PledgeHook(session, pledge))
-
-    async def mark_paid_by_payment_id(
-        self, session: AsyncSession, payment_id: str, amount: int, transaction_id: str
-    ) -> None:
-        pledge = await self.get_by_payment_id(session, payment_id)
-
-        if not pledge:
-            raise ResourceNotFound(f"Pledge not found with payment_id: {payment_id}")
-
-        if pledge.state not in PledgeState.to_paid_states():
-            raise Exception(f"pledge is in unexpected state: {pledge.state}")
-
-        pledge.state = PledgeState.paid
-        pledge.transfer_id = transaction_id
-        pledge.paid_at = utc_now()
-
-        transaction = PledgeTransaction(
-            pledge_id=pledge.id,
-            type=PledgeTransactionType.transfer,
-            amount=amount,
-            transaction_id=transaction_id,
-        )
-
-        session.add(pledge)
-        session.add(transaction)
-        await session.commit()
-
-        await pledge_updated.call(PledgeHook(session, pledge))
-        await pledge_paid.call(PledgePaidHook(session, pledge, transaction))
 
     async def refund_by_payment_id(
         self, session: AsyncSession, payment_id: str, amount: int, transaction_id: str
@@ -635,7 +817,35 @@ class PledgeService(ResourceServiceReader[Pledge]):
         await session.commit()
         await pledge_updated.call(PledgeHook(session, pledge))
 
-    async def transfer(self, session: AsyncSession, pledge_id: UUID) -> None:
+    async def get_reward(
+        self, session: AsyncSession, split_id: UUID
+    ) -> IssueReward | None:
+        stmt = sql.select(IssueReward).where(IssueReward.id == split_id)
+        res = await session.execute(stmt)
+        return res.scalars().unique().one_or_none()
+
+    async def get_transaction(
+        self,
+        session: AsyncSession,
+        type: PledgeTransactionType | None = None,
+        pledge_id: UUID | None = None,
+        issue_reward_id: UUID | None = None,
+    ) -> PledgeTransaction | None:
+        stmt = sql.select(PledgeTransaction)
+
+        if type:
+            stmt = stmt.where(PledgeTransaction.type == type)
+        if pledge_id:
+            stmt = stmt.where(PledgeTransaction.pledge_id == pledge_id)
+        if issue_reward_id:
+            stmt = stmt.where(PledgeTransaction.issue_reward_id == issue_reward_id)
+
+        res = await session.execute(stmt)
+        return res.scalars().unique().one_or_none()
+
+    async def transfer(
+        self, session: AsyncSession, pledge_id: UUID, issue_reward_id: UUID
+    ) -> None:
         pledge = await self.get(session, id=pledge_id)
         if not pledge:
             raise ResourceNotFound(f"Pledge not found with id: {pledge_id}")
@@ -646,26 +856,123 @@ class PledgeService(ResourceServiceReader[Pledge]):
                 "Pledge is not ready for payput (still in dispute window)"
             )
 
-        organization = await organization_service.get_with_loaded(
-            session, id=pledge.organization_id
-        )
-        if organization is None or organization.account is None:
-            raise NotPermitted("Organization has no account")
+        # get receiver
+        split = await self.get_reward(session, issue_reward_id)
+        if not split:
+            raise ResourceNotFound(f"IssueReward not found with id: {issue_reward_id}")
 
-        organization_share = round(pledge.amount * 0.9)  # TODO: proper calculation
+        # check that this split is for the same issue as the pledge
+        if split.issue_id != pledge.issue_id:
+            raise ResourceNotFound("IssueReward is not valid for this pledge_id")
+
+        if not split.user_id and not split.organization_id:
+            raise NotPermitted(
+                "Either user_id or organization_id must be set on the split to create a transfer"  # noqa: E501
+            )
+
+        # sanity check
+        if split.share_thousands < 0 or split.share_thousands > 1000:
+            raise NotPermitted("unexpected split share")
+
+        # check that this transfer hasn't already been made!
+        existing_trx = await self.get_transaction(
+            session, pledge_id=pledge.id, issue_reward_id=split.id
+        )
+        if existing_trx:
+            raise NotPermitted(
+                "A transfer for this pledge_id and issue_reward_id already exists, refusing to make another one"  # noqa: E501
+            )
+
+        # pledge amount - 10% (polars cut) * the users share
+        payout_amount = round(pledge.amount * 0.9 * split.share_thousands / 1000)
+
+        if split.user_id:
+            pay_to_account = await account_service.get_by_user(session, split.user_id)
+            if pay_to_account is None:
+                raise NotPermitted("Receiving user has no account")
+
+        elif split.organization_id:
+            pay_to_account = await account_service.get_by_org(
+                session, split.organization_id
+            )
+            if pay_to_account is None:
+                raise NotPermitted("Receiving organization has no account")
+        else:
+            raise NotPermitted("Unexpected split receiver")
+
         transfer_id = account_service.transfer(
             session=session,
-            account=organization.account,
-            amount=organization_share,
+            account=pay_to_account,
+            amount=payout_amount,
             transfer_group=f"{pledge.id}",
         )
 
         if transfer_id is None:
             raise NotPermitted("Transfer failed")  # TODO: Better error
 
-        await self.mark_paid_by_payment_id(
-            session, pledge.payment_id, organization_share, transfer_id
+        transaction = PledgeTransaction(
+            pledge_id=pledge.id,
+            type=PledgeTransactionType.transfer,
+            amount=payout_amount,
+            transaction_id=transfer_id,
+            issue_reward_id=split.id,
         )
+
+        session.add(transaction)
+        await session.commit()
+
+        # send notification
+        await self.transfer_created_notification(session, pledge, transaction, split)
+
+    async def transfer_created_notification(
+        self,
+        session: AsyncSession,
+        pledge: Pledge,
+        transaction: PledgeTransaction,
+        split: IssueReward,
+    ) -> None:
+        issue = await issue_service.get(session, pledge.issue_id)
+        if not issue:
+            log.error("pledge_paid_notification.no_issue_found")
+            return
+
+        org = await organization_service.get(session, issue.organization_id)
+        if not org:
+            log.error("pledge_paid_notification.no_org_found")
+            return
+
+        repo = await repository_service.get(session, issue.repository_id)
+        if not repo:
+            log.error("pledge_paid_notification.no_repo_found")
+            return
+
+        n = RewardPaidNotification(
+            issue_url=f"https://github.com/{org.name}/{repo.name}/issues/{issue.number}",
+            issue_title=issue.title,
+            issue_org_name=org.name,
+            issue_repo_name=repo.name,
+            issue_number=issue.number,
+            paid_out_amount=get_cents_in_dollar_string(transaction.amount),
+            pledge_id=pledge.id,
+            issue_id=issue.id,
+        )
+
+        if split.organization_id:
+            await notification_service.send_to_org(
+                session=session,
+                org_id=split.organization_id,
+                notif=PartialNotification(
+                    issue_id=pledge.issue_id, pledge_id=pledge.id, payload=n
+                ),
+            )
+        elif split.user_id:
+            await notification_service.send_to_user(
+                session=session,
+                user_id=split.user_id,
+                notif=PartialNotification(
+                    issue_id=pledge.issue_id, pledge_id=pledge.id, payload=n
+                ),
+            )
 
     async def get_by_payment_id(
         self, session: AsyncSession, payment_id: str
@@ -720,13 +1027,6 @@ class PledgeService(ResourceServiceReader[Pledge]):
 
         await pledge_disputed.call(PledgeHook(session, pledge))
         await pledge_updated.call(PledgeHook(session, pledge))
-
-    def user_can_read_pledge(
-        self, user: User, pledge: Pledge, memberships: Sequence[UserOrganization]
-    ) -> bool:
-        return self.user_can_admin_sender_pledge(
-            user, pledge, memberships
-        ) or self.user_can_admin_received_pledge(pledge, memberships)
 
     def user_can_admin_sender_pledge(
         self, user: User, pledge: Pledge, memberships: Sequence[UserOrganization]

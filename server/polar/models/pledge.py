@@ -25,6 +25,9 @@ class Pledge(RecordModel):
         PostgresUUID, ForeignKey("organizations.id"), nullable=False
     )
     payment_id: Mapped[str] = mapped_column(String, nullable=True, index=True)
+
+    # Deprecated: Not relevant after introduction of split rewards.
+    # Instead see pledge_transactions table.
     transfer_id: Mapped[str] = mapped_column(String, nullable=True)
 
     email: Mapped[str] = mapped_column(String, nullable=True, index=True, default=None)
@@ -53,9 +56,6 @@ class Pledge(RecordModel):
         TIMESTAMP(timezone=True), nullable=True
     )
     refunded_at: Mapped[datetime | None] = mapped_column(
-        TIMESTAMP(timezone=True), nullable=True
-    )
-    paid_at: Mapped[datetime | None] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True
     )
 

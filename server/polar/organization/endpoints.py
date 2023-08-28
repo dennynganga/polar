@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import List, Sequence
+from typing import List
 from uuid import UUID
 
 import structlog
@@ -9,11 +9,10 @@ from polar.auth.dependencies import Auth
 from polar.enums import Platforms
 from polar.integrations.github.badge import GithubBadge
 from polar.postgres import AsyncSession, get_db_session
-from polar.repository.schemas import Repository as RepositorySchema
 from polar.repository.schemas import RepositoryLegacyRead
 from polar.repository.service import repository as repository_service
 from polar.tags.api import Tags
-from polar.types import ListResource
+from polar.types import ListResource, Pagination
 
 from .schemas import (
     Organization as OrganizationSchema,
@@ -45,9 +44,13 @@ async def list(
     auth: Auth = Depends(Auth.current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> ListResource[OrganizationSchema]:
+    if not auth.user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
     orgs = await organization.list_all_orgs_by_user_id(session, auth.user.id)
     return ListResource(
         items=[OrganizationSchema.from_db(o) for o in orgs],
+        pagination=Pagination(total_count=len(orgs)),
     )
 
 
@@ -69,10 +72,16 @@ async def search(
     if platform and organization_name:
         org = await organization.get_by_name(session, platform, organization_name)
         if org:
-            return ListResource(items=[OrganizationSchema.from_db(org)])
+            return ListResource(
+                items=[OrganizationSchema.from_db(org)],
+                pagination=Pagination(total_count=0),
+            )
 
     # no org found
-    return ListResource(items=[])
+    return ListResource(
+        items=[],
+        pagination=Pagination(total_count=0),
+    )
 
 
 @router.get(

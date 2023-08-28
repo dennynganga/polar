@@ -1,6 +1,7 @@
 import { InfiniteData, useMutation, useQuery } from '@tanstack/react-query'
 import { api, queryClient } from '../../api'
 import {
+  ConfirmIssueSplit,
   CurrencyAmount,
   Issue,
   IssueListResponse,
@@ -47,9 +48,8 @@ export const useIssueAddPolarBadge = () =>
                         ...result,
 
                         // Map Issue (Public API) to IssueDashboardRead
-                        organization_id:
-                          result.repository?.organization?.id || '',
-                        repository_id: result?.repository.id || '',
+                        organization_id: result.repository.organization.id,
+                        repository_id: result.repository.id,
                         state:
                           result.state === Issue.state.OPEN
                             ? State.OPEN
@@ -100,9 +100,8 @@ export const useIssueRemovePolarBadge = () =>
                         ...result,
 
                         // Map Issue (Public API) to IssueDashboardRead
-                        organization_id:
-                          result.repository?.organization?.id || '',
-                        repository_id: result?.repository.id || '',
+                        organization_id: result.repository.organization.id,
+                        repository_id: result.repository.id,
                         state:
                           result.state === Issue.state.OPEN
                             ? State.OPEN
@@ -191,9 +190,8 @@ export const useUpdateIssue = () =>
                         ...result,
 
                         // Map Issue (Public API) to IssueDashboardRead
-                        organization_id:
-                          result.repository?.organization?.id || '',
-                        repository_id: result?.repository.id || '',
+                        organization_id: result.repository.organization.id,
+                        repository_id: result.repository.id,
                         state:
                           result.state === Issue.state.OPEN
                             ? State.OPEN
@@ -243,3 +241,20 @@ export const useSearchIssues = (v: {
       enabled: !!v.organizationName,
     },
   )
+
+export const useIssueMarkConfirmed = () =>
+  useMutation({
+    mutationFn: (variables: { id: string; splits: ConfirmIssueSplit[] }) => {
+      return api.issues.confirm({
+        id: variables.id,
+        requestBody: {
+          splits: variables.splits,
+        },
+      })
+    },
+    onSuccess: async (result, variables, ctx) => {
+      await queryClient.invalidateQueries(['dashboard'])
+      await queryClient.invalidateQueries(['pledge'])
+      await queryClient.invalidateQueries(['listPersonalPledges'])
+    },
+  })

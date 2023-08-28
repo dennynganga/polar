@@ -1,16 +1,19 @@
+import { Modal as ModernModal } from '@/components/Modal'
 import Modal, { ModalBox } from '@/components/Shared/Modal'
 import { useToastLatestPledged } from '@/hooks/stripe'
 import Image from 'next/image'
 import { useRouter } from 'next/router'
 import { api } from 'polarkit/api'
 import {
+  Issue,
   IssueDashboardRead,
   IssuePublicRead,
   IssueReferenceRead,
   IssueStatus,
+  Label,
   Organization,
-  Platforms,
   Repository,
+  UserRead,
   type PledgeRead,
 } from 'polarkit/api/client'
 import { IssueReadWithRelations } from 'polarkit/api/types'
@@ -24,16 +27,18 @@ import { githubIssueUrl } from 'polarkit/github'
 import { useIssueMarkConfirmed } from 'polarkit/hooks'
 import { getCentsInDollarString } from 'polarkit/money'
 import { ChangeEvent, useState } from 'react'
+import SplitRewardModal from '../Finance/SplitRewardModal'
+import { useModal } from '../Modal/useModal'
 import PledgeNow from '../Pledge/PledgeNow'
 import IconCounter from './IconCounter'
-import IssueLabel, { LabelSchema } from './IssueLabel'
+import IssueLabel from './IssueLabel'
 import IssueProgress, { Progress } from './IssueProgress'
 import { AddBadgeButton } from './IssuePromotionModal'
 
 const IssueListItem = (props: {
   org: Organization
   repo: Repository
-  issue: IssueDashboardRead | IssuePublicRead
+  issue: IssueDashboardRead | IssuePublicRead | Issue
   references: IssueReferenceRead[]
   dependents?: IssueReadWithRelations[]
   pledges: PledgeRead[]
@@ -42,6 +47,7 @@ const IssueListItem = (props: {
   showIssueProgress: boolean
   showPledgeAction: boolean
   right?: React.ReactElement
+  showSelfPledgesFor?: UserRead
 }) => {
   const { title, number, state, issue_created_at, reactions, comments } =
     props.issue
@@ -73,20 +79,24 @@ const IssueListItem = (props: {
   const showReactionsThumbs = !!(reactions.plus_one > 0)
 
   const getissueProgress = (): Progress => {
-    switch (props.issue.progress) {
-      case IssueStatus.BUILDING:
-        return 'building'
-      case IssueStatus.PULL_REQUEST:
-        return 'pull_request'
-      case IssueStatus.CLOSED:
-        return 'closed'
-      case IssueStatus.IN_PROGRESS:
-        return 'in_progress'
-      case IssueStatus.TRIAGED:
-        return 'triaged'
-      default:
-        return 'backlog'
+    if ('progress' in props.issue) {
+      switch (props.issue.progress) {
+        case IssueStatus.BUILDING:
+          return 'building'
+        case IssueStatus.PULL_REQUEST:
+          return 'pull_request'
+        case IssueStatus.CLOSED:
+          return 'closed'
+        case IssueStatus.IN_PROGRESS:
+          return 'in_progress'
+        case IssueStatus.TRIAGED:
+          return 'triaged'
+        default:
+          return 'backlog'
+      }
     }
+
+    return 'backlog'
   }
   const issueProgress = getissueProgress()
 
@@ -114,6 +124,7 @@ const IssueListItem = (props: {
   const dependentOrg = props.dependents && props.dependents[0].organization
   const showPledgeAction =
     isDependency &&
+    'progress' in props.issue &&
     props.issue.progress !== IssueStatus.CLOSED &&
     props.showPledgeAction
 
@@ -130,36 +141,18 @@ const IssueListItem = (props: {
     router.push(url.toString())
   }
 
-  const rowMotion = {
-    rest: {},
-    hover: {},
-  }
-
-  const rightSideMotion = {
-    rest: {
-      x: props.canAddRemovePolarLabel ? 115 : 0,
-    },
-    hover: {
-      x: 0,
-    },
-  }
-
-  const [isHovered, setIsHovered] = useState(false)
-
   const markConfirmed = useIssueMarkConfirmed()
 
-  const onConfirmPledge = async (
-    orgName: string,
-    repoName: string,
-    issueNumber: number,
-  ) => {
+  const onConfirmPledge = async (issue_id: string) => {
     await markConfirmed.mutateAsync({
-      platform: Platforms.GITHUB,
-      orgName,
-      repoName,
-      issueNumber,
+      id: issue_id,
+      // Give 100% of the rewards to the org
+      splits: [{ organization_id: props.org.id, share_thousands: 1000 }],
     })
   }
+
+  const { isShown: isSplitRewardsModalShown, hide: closeSplitRewardModal } =
+    useModal()
 
   return (
     <>
@@ -193,20 +186,20 @@ const IssueListItem = (props: {
                 </a>
 
                 {props.issue.labels &&
-                  props.issue.labels.map((label: LabelSchema) => {
-                    return <IssueLabel label={label} key={label.id} />
+                  props.issue.labels.map((label: Label) => {
+                    return <IssueLabel label={label} key={label.name} />
                   })}
               </div>
               {!isDependency && (
                 <div className="text-xs text-gray-500">
                   <p>
                     #{number}{' '}
-                    {state == 'open' && (
+                    {(state == 'open' || state === Issue.state.OPEN) && (
                       <>
                         opened <PolarTimeAgo date={new Date(createdAt)} />
                       </>
                     )}
-                    {state == 'closed' && (
+                    {(state == 'closed' || state === Issue.state.CLOSED) && (
                       <>
                         closed <PolarTimeAgo date={new Date(closedAt)} />
                       </>
@@ -254,13 +247,15 @@ const IssueListItem = (props: {
 
               {showPledgeAction && <PledgeNow onClick={redirectToPledge} />}
 
-              {props.canAddRemovePolarLabel && 'funding' in props.issue && (
-                <AddBadgeButton
-                  orgName={props.org.name}
-                  repoName={props.repo.name}
-                  issue={props.issue}
-                />
-              )}
+              {props.canAddRemovePolarLabel &&
+                'funding' in props.issue &&
+                'pledge_badge_currently_embedded' in props.issue && (
+                  <AddBadgeButton
+                    orgName={props.org.name}
+                    repoName={props.repo.name}
+                    issue={props.issue}
+                  />
+                )}
 
               {props.right}
             </div>
@@ -281,6 +276,7 @@ const IssueListItem = (props: {
               onConfirmPledges={onConfirmPledge}
               confirmPledgeIsLoading={markConfirmed.isLoading}
               funding={'funding' in props.issue ? props.issue.funding : {}}
+              showSelfPledgesFor={props.showSelfPledgesFor}
             />
           </IssueActivityBox>
         )}
@@ -291,6 +287,19 @@ const IssueListItem = (props: {
           <DisputeModal pledge={showDisputeModalForPledge} />
         </Modal>
       )}
+
+      <ModernModal
+        isShown={isSplitRewardsModalShown}
+        hide={closeSplitRewardModal}
+        modalContent={
+          <>
+            <SplitRewardModal
+              issueId={props.issue.id}
+              onCancel={closeSplitRewardModal}
+            />
+          </>
+        }
+      />
     </>
   )
 }

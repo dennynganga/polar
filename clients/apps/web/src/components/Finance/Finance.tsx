@@ -1,111 +1,125 @@
-import Banner from '@/components/Banner/Banner'
 import Icon from '@/components/Icons/Icon'
 import { ExclamationCircleIcon } from '@heroicons/react/24/outline'
 import Link from 'next/link'
-import { ACCOUNT_TYPE_DISPLAY_NAMES, ACCOUNT_TYPE_ICON } from 'polarkit/account'
+import {
+  ACCOUNT_TYPE_DISPLAY_NAMES,
+  ACCOUNT_TYPE_ICON,
+  ALL_ACCOUNT_TYPES,
+} from 'polarkit/account'
 import { api } from 'polarkit/api'
 import {
-  AccountRead,
+  Account,
   AccountType,
   Organization,
-  Platforms,
-  PledgeResources,
+  Pledge,
   PledgeState,
+  Reward,
+  RewardState,
 } from 'polarkit/api/client'
-import { PrimaryButton } from 'polarkit/components/ui'
+import { Banner, PrimaryButton } from 'polarkit/components/ui'
 import { getCentsInDollarString } from 'polarkit/money'
 import { classNames } from 'polarkit/utils'
 import { useState } from 'react'
 import SetupAccount from '../Dashboard/SetupAccount'
 import { Modal as ModernModal } from '../Modal'
-import List from './List'
+import { default as ListPledges } from './ListPledges'
+import ListRewards, { Column } from './ListRewards'
+
+const refundedStates = [PledgeState.REFUNDED, PledgeState.CHARGE_DISPUTED]
+const inReviewStates = [PledgeState.CONFIRMATION_PENDING, PledgeState.DISPUTED]
+const paidStates = [PledgeState.PENDING]
 
 const Finance = (props: {
   org: Organization
-  tab: 'current' | 'rewarded'
-  pledges: PledgeResources[]
-  accounts: AccountRead[]
+  tab: 'current' | 'rewarded' | 'contributors'
+  pledges: Pledge[]
+  accounts: Account[]
+  rewards: Reward[]
 }) => {
-  const { org, tab, pledges, accounts } = props
-
-  const refundedStates = [PledgeState.REFUNDED, PledgeState.CHARGE_DISPUTED]
-  const inReviewStates = [
-    PledgeState.CONFIRMATION_PENDING,
-    PledgeState.DISPUTED,
-    PledgeState.PENDING,
-  ]
-  const paidStates = [PledgeState.PAID]
+  const { org, tab, pledges, accounts, rewards } = props
 
   const currentPledges =
-    pledges.filter((pr) => pr.pledge.state !== PledgeState.PAID) || []
+    pledges.filter((pr) => pr.state !== PledgeState.PENDING) || []
 
   const currentPledgesAmount = currentPledges
-    .filter((pr) => !refundedStates.includes(pr.pledge.state))
-    .map((pr) => pr.pledge.amount)
+    .filter((pr) => !refundedStates.includes(pr.state))
+    .map((pr) => pr.amount.amount)
     .reduce((a, b) => a + b, 0)
 
-  const rewardedPledges =
-    pledges.filter((pr) => pr.pledge.state === PledgeState.PAID) || []
+  const rewardsToSelfOrg = rewards.filter(
+    (r) => r.organization && r.organization.id === org.id,
+  )
 
-  const rewardedPledgesAmount = rewardedPledges
-    .map((pr) => pr.pledge.amount)
+  const rewardsToContributors = rewards.filter((r) => r.user)
+
+  const rewardedToSelfAmount = rewardsToSelfOrg
+    .map((r) => r.amount.amount)
     .reduce((a, b) => a + b, 0)
 
-  const tabPledges = tab === 'current' ? currentPledges : rewardedPledges
+  const rewardedToContributorsAmount = rewardsToContributors
+    .map((r) => r.amount.amount)
+    .reduce((a, b) => a + b, 0)
 
-  const openIssues = tabPledges.filter(
-    (pr) =>
-      !paidStates.includes(pr.pledge.state) &&
-      !refundedStates.includes(pr.pledge.state) &&
-      !inReviewStates.includes(pr.pledge.state),
-  )
-
-  const refunded = tabPledges.filter((pr) =>
-    refundedStates.includes(pr.pledge.state),
-  )
-
-  const inReview = tabPledges.filter((pr) =>
-    inReviewStates.includes(pr.pledge.state),
-  )
-
-  const paid = tabPledges.filter((pr) => paidStates.includes(pr.pledge.state))
+  const tabContents: Record<string, React.ReactElement> = {
+    current: <PledgesContent pledges={currentPledges} />,
+    rewarded: (
+      <RewardsContent rewards={rewardsToSelfOrg} showReceiver={false} />
+    ),
+    contributors: (
+      <RewardsContent rewards={rewardsToContributors} showReceiver={true} />
+    ),
+  }
 
   return (
     <div className="flex flex-col space-y-8">
-      <AccountBanner org={org} accounts={accounts} />
+      <AccountBanner accounts={accounts} org={org} />
 
       <div className="flex space-x-8">
         <HeaderPill
           title="Current pledges"
           amount={currentPledgesAmount}
           active={props.tab === 'current'}
-          href={`/finance/${org.name}`}
+          href={`/maintainer/${org.name}/finance`}
         />
         <HeaderPill
           title={`Rewarded to ${org.name}`}
-          amount={rewardedPledgesAmount}
+          amount={rewardedToSelfAmount}
           active={props.tab === 'rewarded'}
-          href={`/finance/${org.name}/rewarded`}
+          href={`/maintainer/${org.name}/finance/rewarded`}
         />
-        {false && (
-          <HeaderPill
-            title="Rewarded to contributors"
-            amount={0}
-            active={false}
-            href={`/finance/${org.name}/contributors`}
-          />
-        )}
+        <HeaderPill
+          title="Rewarded to contributors"
+          amount={rewardedToContributorsAmount}
+          active={props.tab === 'contributors'}
+          href={`/maintainer/${org.name}/finance/contributors`}
+        />
       </div>
-      {paid.length > 0 && (
-        <List
-          pledges={paid}
-          columns={['PAID_OUT_DATE']}
-          title="Paid out"
-          subtitle="Issue solved"
-        />
-      )}
+
+      {tabContents[tab] || null}
+    </div>
+  )
+}
+
+export default Finance
+
+const PledgesContent = (props: { pledges: Pledge[] }) => {
+  const openIssues = props.pledges.filter(
+    (p) =>
+      !paidStates.includes(p.state) &&
+      !refundedStates.includes(p.state) &&
+      !inReviewStates.includes(p.state),
+  )
+
+  const refunded = props.pledges.filter((p) => refundedStates.includes(p.state))
+
+  const inReview = props.pledges.filter((p) => inReviewStates.includes(p.state))
+
+  const paid = props.pledges.filter((p) => paidStates.includes(p.state))
+
+  return (
+    <>
       {inReview.length > 0 && (
-        <List
+        <ListPledges
           pledges={inReview}
           columns={['ESTIMATED_PAYOUT_DATE']}
           title="In review"
@@ -113,7 +127,7 @@ const Finance = (props: {
         />
       )}
       {openIssues.length > 0 && (
-        <List
+        <ListPledges
           pledges={openIssues}
           columns={[]}
           title="Pledges on open issues"
@@ -121,18 +135,54 @@ const Finance = (props: {
         />
       )}
       {refunded.length > 0 && (
-        <List
+        <ListPledges
           pledges={refunded}
           columns={['REFUNDED_DATE']}
           title="Refunds"
           subtitle="Issue"
         />
       )}
-    </div>
+    </>
   )
 }
 
-const HeaderPill = (props: {
+export const RewardsContent = (props: {
+  rewards: Reward[]
+  showReceiver: boolean
+}) => {
+  const pending = props.rewards.filter((r) => r.state == RewardState.PENDING)
+  const paid = props.rewards.filter((r) => r.state == RewardState.PAID)
+
+  const pendingColumns: Column[] = props.showReceiver
+    ? ['ESTIMATED_PAYOUT_DATE', 'RECEIVER']
+    : ['ESTIMATED_PAYOUT_DATE']
+  const paidColumns: Column[] = props.showReceiver
+    ? ['PAID_OUT_DATE', 'RECEIVER']
+    : ['PAID_OUT_DATE']
+
+  return (
+    <>
+      {pending.length > 0 && (
+        <ListRewards
+          rewards={pending}
+          columns={pendingColumns}
+          title="Pending"
+          subtitle="Issue solved"
+        />
+      )}
+      {paid.length > 0 && (
+        <ListRewards
+          rewards={paid}
+          columns={paidColumns}
+          title="Paid"
+          subtitle="Issue solved"
+        />
+      )}
+    </>
+  )
+}
+
+export const HeaderPill = (props: {
   title: string
   amount: number
   active: boolean
@@ -152,9 +202,9 @@ const HeaderPill = (props: {
         {props.title}
       </div>
       <div className="text-3xl font-medium text-gray-900 dark:text-gray-200">
-        ${getCentsInDollarString(props.amount, true)}
+        ${getCentsInDollarString(props.amount, true, true)}
       </div>
-      {props.active && (
+      {props.active && props.amount > 0 && (
         <>
           <Triangle />
           <div className="absolute left-1/2 bottom-0 -ml-6 h-2 w-12  bg-white dark:bg-gray-800"></div>
@@ -164,8 +214,6 @@ const HeaderPill = (props: {
   )
 }
 
-export default Finance
-
 const Triangle = () => (
   <svg
     width="27"
@@ -174,11 +222,6 @@ const Triangle = () => (
     fill="none"
     xmlns="http://www.w3.org/2000/svg"
     className="absolute -bottom-[12px] left-1/2 -ml-[14px] text-white drop-shadow filter dark:text-gray-800 dark:drop-shadow-[0_1px_0px_#3E3F42]"
-    /*style={{
-      filter:
-        'drop-shadow(0 1px 8px rgb(0 0 0 / 0.07)) drop-shadow(0 0.5px 2.5px rgb(0 0 0 / 0.16))',
-    }}
-    */
   >
     <path
       d="M13.6641 15L0.673682 5.39648e-07L26.6544 -1.73166e-06L13.6641 15Z"
@@ -187,26 +230,19 @@ const Triangle = () => (
   </svg>
 )
 
-const AccountBanner = (props: {
-  org: Organization
-  accounts: AccountRead[]
-}) => {
-  const { org, accounts } = props
+const AccountBanner = (props: { org: Organization; accounts: Account[] }) => {
+  const { accounts } = props
 
-  const goToDashboard = async (account: AccountRead) => {
+  const goToDashboard = async (account: Account) => {
     const link = await api.accounts.dashboardLink({
-      platform: Platforms.GITHUB,
-      orgName: org.name,
-      accountId: account.id,
+      id: account.id,
     })
     window.location.href = link.url
   }
 
-  const goToOnboarding = async (account: AccountRead) => {
+  const goToOnboarding = async (account: Account) => {
     const link = await api.accounts.onboardingLink({
-      platform: Platforms.GITHUB,
-      orgName: org.name,
-      accountId: account.id,
+      id: account.id,
     })
     window.location.href = link.url
   }
@@ -244,7 +280,11 @@ const AccountBanner = (props: {
           isShown={showSetupModal}
           hide={toggle}
           modalContent={
-            <SetupAccount onClose={() => setShowSetupModal(false)} />
+            <SetupAccount
+              onClose={() => setShowSetupModal(false)}
+              accountTypes={ALL_ACCOUNT_TYPES}
+              forOrganizationId={props.org.id}
+            />
           }
         />
       </>
@@ -289,9 +329,9 @@ const AccountBanner = (props: {
           color="muted"
           right={
             <>
-              {accounts[0].is_admin && (
+              {true && (
                 <button
-                  className="font-medium text-blue-500 dark:text-blue-400"
+                  className="whitespace-nowrap font-medium text-blue-500 dark:text-blue-400"
                   onClick={(e) => {
                     e.preventDefault()
                     goToDashboard(accounts[0])
@@ -300,7 +340,7 @@ const AccountBanner = (props: {
                   Go to {ACCOUNT_TYPE_DISPLAY_NAMES[accountType]}
                 </button>
               )}
-              {!accounts[0].is_admin && (
+              {false && (
                 <span className="text-gray-400">
                   Ask the admin to make changes
                 </span>

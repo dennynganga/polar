@@ -7,16 +7,25 @@ import pytest
 from pytest_mock import MockerFixture
 
 from polar.enums import AccountType
+from polar.exceptions import NotPermitted
+from polar.issue.schemas import ConfirmIssueSplit
 from polar.kit.utils import utc_now
 from polar.models.account import Account
 from polar.models.issue import Issue
+from polar.models.issue_reward import IssueReward
 from polar.models.organization import Organization
 from polar.models.pledge import Pledge
+from polar.models.pledge_transaction import PledgeTransaction
 from polar.models.repository import Repository
-from polar.models.user import User
-from polar.pledge.schemas import PledgeState
+from polar.models.user import OAuthAccount, User
+from polar.pledge.schemas import PledgeState, PledgeTransactionType
 from polar.pledge.service import pledge as pledge_service
 from polar.postgres import AsyncSession
+from tests.fixtures.random_objects import (
+    create_issue,
+    create_organization,
+    create_repository,
+)
 
 
 @pytest.mark.asyncio
@@ -25,8 +34,9 @@ async def test_mark_pending_by_pledge_id(
     pledge: Pledge,
     mocker: MockerFixture,
 ) -> None:
-    pending_notif = mocker.patch("polar.receivers.pledges.pledge_pending_notification")
-    paid_notif = mocker.patch("polar.receivers.pledges.pledge_paid_notification")
+    pending_notif = mocker.patch(
+        "polar.pledge.service.PledgeService.pledge_pending_notification"
+    )
 
     await pledge_service.mark_pending_by_pledge_id(session, pledge.id)
 
@@ -36,7 +46,6 @@ async def test_mark_pending_by_pledge_id(
     assert got.state == PledgeState.pending
 
     pending_notif.assert_called_once()
-    paid_notif.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -50,7 +59,7 @@ async def test_mark_confirmation_pending_by_issue_id(
     mocker: MockerFixture,
 ) -> None:
     confirmation_pending_notif = mocker.patch(
-        "polar.receivers.pledges.pledge_confirmation_pending_notification"
+        "polar.pledge.service.PledgeService.pledge_confirmation_pending_notifications"
     )
 
     amount = 2000
@@ -89,7 +98,7 @@ async def test_mark_confirmation_pending_by_issue_id(
         PledgeState.confirmation_pending,
     ]
 
-    assert confirmation_pending_notif.call_count == 3
+    assert confirmation_pending_notif.call_count == 1
 
 
 @pytest.mark.asyncio
@@ -102,8 +111,9 @@ async def test_mark_pending_by_issue_id(
     pledging_organization: Organization,
     mocker: MockerFixture,
 ) -> None:
-    pending_notif = mocker.patch("polar.receivers.pledges.pledge_pending_notification")
-    paid_notif = mocker.patch("polar.receivers.pledges.pledge_paid_notification")
+    pending_notif = mocker.patch(
+        "polar.pledge.service.PledgeService.pledge_pending_notification"
+    )
 
     amount = 2000
     fee = 200
@@ -141,57 +151,7 @@ async def test_mark_pending_by_issue_id(
         PledgeState.pending,
     ]
 
-    assert pending_notif.call_count == 3
-    paid_notif.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_mark_paid_by_payment_id(
-    session: AsyncSession,
-    pledge: Pledge,
-    mocker: MockerFixture,
-) -> None:
-    m = mocker.patch("polar.receivers.pledges.pledge_paid_notification")
-
-    # created -> pending
-    await pledge_service.mark_pending_by_pledge_id(session, pledge.id)
-
-    # Create fake payment
-    pledge.payment_id = "payment-id"
-    await pledge.save(session)
-    await session.commit()
-
-    await pledge_service.mark_paid_by_payment_id(session, "payment-id", 100, "trx-id")
-
-    # get
-    got = await pledge_service.get(session, pledge.id)
-    assert got is not None
-    assert got.state == PledgeState.paid
-
-    m.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_mark_paid_by_payment_id_fails_unexpected_state(
-    session: AsyncSession,
-    pledge: Pledge,
-    mocker: MockerFixture,
-) -> None:
-    m = mocker.patch("polar.receivers.pledges.pledge_paid_notification")
-
-    # Create fake payment
-    pledge.payment_id = "payment-id-2"
-    await pledge.save(session)
-    await session.commit()
-
-    with pytest.raises(
-        Exception, match="pledge is in unexpected state: PledgeState.created"
-    ) as excinfo:
-        await pledge_service.mark_paid_by_payment_id(
-            session, "payment-id-2", 100, "trx-id"
-        )
-
-    m.assert_not_called()
+    assert pending_notif.call_count == 1
 
 
 @pytest.mark.asyncio
@@ -200,8 +160,15 @@ async def test_transfer_unexpected_state(
     pledge: Pledge,
     mocker: MockerFixture,
 ) -> None:
+    reward = await IssueReward.create(
+        session,
+        issue_id=pledge.issue_id,
+        organization_id=pledge.organization_id,
+        share_thousands=1000,
+    )
+
     with pytest.raises(Exception, match="Pledge is not in pending state") as excinfo:
-        await pledge_service.transfer(session, pledge.id)
+        await pledge_service.transfer(session, pledge.id, issue_reward_id=reward.id)
 
 
 @pytest.mark.asyncio
@@ -212,21 +179,32 @@ async def test_transfer_early(
 ) -> None:
     await pledge_service.mark_pending_by_pledge_id(session, pledge.id)
 
+    reward = await IssueReward.create(
+        session,
+        issue_id=pledge.issue_id,
+        organization_id=pledge.organization_id,
+        share_thousands=1000,
+    )
+
     with pytest.raises(
         Exception,
         match=re.escape("Pledge is not ready for payput (still in dispute window)"),
     ) as excinfo:
-        await pledge_service.transfer(session, pledge.id)
+        await pledge_service.transfer(session, pledge.id, issue_reward_id=reward.id)
 
 
 @pytest.mark.asyncio
-async def test_transfer(
+async def test_transfer_org(
     session: AsyncSession,
     pledge: Pledge,
     organization: Organization,
     user: User,
     mocker: MockerFixture,
 ) -> None:
+    paid_notification = mocker.patch(
+        "polar.pledge.service.PledgeService.transfer_created_notification"
+    )
+
     await pledge_service.mark_pending_by_pledge_id(session, pledge.id)
 
     got = await pledge_service.get(session, pledge.id)
@@ -246,10 +224,14 @@ async def test_transfer(
         is_payouts_enabled=True,
         business_type="company",
     )
-    # session.expire_all()
     await session.flush()
-    organization.account = account
-    await organization.save(session)
+
+    reward = await IssueReward.create(
+        session,
+        issue_id=pledge.issue_id,
+        organization_id=organization.id,
+        share_thousands=1000,
+    )
 
     @dataclass
     class Trans:
@@ -260,10 +242,434 @@ async def test_transfer(
     transfer = mocker.patch("polar.integrations.stripe.service.StripeService.transfer")
     transfer.return_value = Trans()
 
-    await pledge_service.transfer(session, pledge.id)
+    await pledge_service.transfer(session, pledge.id, issue_reward_id=reward.id)
 
     transfer.assert_called_once()
 
     after_transfer = await pledge_service.get(session, pledge.id)
     assert after_transfer is not None
-    assert after_transfer.state is PledgeState.paid
+
+    paid_notification.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_transfer_org_no_account(
+    session: AsyncSession,
+    pledge: Pledge,
+    organization: Organization,
+    mocker: MockerFixture,
+) -> None:
+    paid_notification = mocker.patch(
+        "polar.pledge.service.PledgeService.transfer_created_notification"
+    )
+
+    await pledge_service.mark_pending_by_pledge_id(session, pledge.id)
+
+    got = await pledge_service.get(session, pledge.id)
+    assert got is not None
+    got.scheduled_payout_at = utc_now() - timedelta(days=2)
+    got.payment_id = "test_transfer_payment_id"
+    await got.save(session)
+    await session.flush()
+
+    reward = await IssueReward.create(
+        session,
+        issue_id=pledge.issue_id,
+        organization_id=organization.id,
+        share_thousands=1000,
+    )
+
+    @dataclass
+    class Trans:
+        @property
+        def stripe_id(self) -> str:
+            return "transfer_id"
+
+    transfer = mocker.patch("polar.integrations.stripe.service.StripeService.transfer")
+    transfer.return_value = Trans()
+
+    with pytest.raises(NotPermitted, match="Receiving organization has no account"):
+        await pledge_service.transfer(session, pledge.id, issue_reward_id=reward.id)
+
+    transfer.assert_not_called()
+    paid_notification.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_transfer_user(
+    session: AsyncSession,
+    pledge: Pledge,
+    user: User,
+    mocker: MockerFixture,
+) -> None:
+    paid_notification = mocker.patch(
+        "polar.pledge.service.PledgeService.transfer_created_notification"
+    )
+
+    await pledge_service.mark_pending_by_pledge_id(session, pledge.id)
+
+    got = await pledge_service.get(session, pledge.id)
+    assert got is not None
+    got.scheduled_payout_at = utc_now() - timedelta(days=2)
+    got.payment_id = "test_transfer_payment_id"
+    await got.save(session)
+
+    account = await Account.create(
+        session=session,
+        user_id=user.id,
+        account_type=AccountType.stripe,
+        admin_id=user.id,
+        stripe_id="testing_account_1",
+        is_details_submitted=True,
+        is_charges_enabled=True,
+        is_payouts_enabled=True,
+        business_type="individual",
+    )
+    await session.flush()
+
+    reward = await IssueReward.create(
+        session,
+        issue_id=pledge.issue_id,
+        user_id=user.id,
+        share_thousands=1000,
+    )
+
+    @dataclass
+    class Trans:
+        @property
+        def stripe_id(self) -> str:
+            return "transfer_id"
+
+    transfer = mocker.patch("polar.integrations.stripe.service.StripeService.transfer")
+    transfer.return_value = Trans()
+
+    await pledge_service.transfer(session, pledge.id, issue_reward_id=reward.id)
+
+    transfer.assert_called_once()
+
+    after_transfer = await pledge_service.get(session, pledge.id)
+    assert after_transfer is not None
+
+    paid_notification.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_transfer_user_no_account(
+    session: AsyncSession,
+    pledge: Pledge,
+    user: User,
+    mocker: MockerFixture,
+) -> None:
+    paid_notification = mocker.patch(
+        "polar.pledge.service.PledgeService.transfer_created_notification"
+    )
+
+    await pledge_service.mark_pending_by_pledge_id(session, pledge.id)
+
+    got = await pledge_service.get(session, pledge.id)
+    assert got is not None
+    got.scheduled_payout_at = utc_now() - timedelta(days=2)
+    got.payment_id = "test_transfer_payment_id"
+    await got.save(session)
+    await session.flush()
+
+    reward = await IssueReward.create(
+        session,
+        issue_id=pledge.issue_id,
+        user_id=user.id,
+        share_thousands=1000,
+    )
+
+    @dataclass
+    class Trans:
+        @property
+        def stripe_id(self) -> str:
+            return "transfer_id"
+
+    transfer = mocker.patch("polar.integrations.stripe.service.StripeService.transfer")
+    transfer.return_value = Trans()
+
+    with pytest.raises(NotPermitted, match="Receiving user has no account"):
+        await pledge_service.transfer(session, pledge.id, issue_reward_id=reward.id)
+
+    transfer.assert_not_called()
+    paid_notification.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_validate_splits() -> None:
+    assert (
+        pledge_service.validate_splits(
+            splits=[
+                ConfirmIssueSplit(share_thousands=1000, organization_id=uuid.uuid4())
+            ]
+        )
+        is True
+    )
+
+    assert (
+        pledge_service.validate_splits(
+            splits=[
+                ConfirmIssueSplit(share_thousands=500, organization_id=uuid.uuid4()),
+                ConfirmIssueSplit(share_thousands=500, organization_id=uuid.uuid4()),
+            ]
+        )
+        is True
+    )
+
+    assert (
+        pledge_service.validate_splits(
+            splits=[
+                ConfirmIssueSplit(share_thousands=500, organization_id=uuid.uuid4()),
+                ConfirmIssueSplit(share_thousands=400, organization_id=uuid.uuid4()),
+            ]
+        )
+        is False
+    )
+
+    assert (
+        pledge_service.validate_splits(
+            splits=[
+                ConfirmIssueSplit(share_thousands=1000, organization_id=uuid.uuid4()),
+                ConfirmIssueSplit(share_thousands=1000, organization_id=uuid.uuid4()),
+                ConfirmIssueSplit(share_thousands=1000, organization_id=uuid.uuid4()),
+            ]
+        )
+        is False
+    )
+
+    assert (
+        pledge_service.validate_splits(
+            splits=[ConfirmIssueSplit(share_thousands=1000, github_username="zegl")]
+        )
+        is True
+    )
+
+    assert (
+        pledge_service.validate_splits(
+            splits=[
+                ConfirmIssueSplit(
+                    share_thousands=1000,
+                    github_username="zegl",
+                    organization_id=uuid.uuid4(),
+                )
+            ]
+        )
+        is False
+    )
+
+    assert (
+        pledge_service.validate_splits(
+            splits=[
+                ConfirmIssueSplit(
+                    share_thousands=1000,
+                )
+            ]
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_issue_rewards(
+    session: AsyncSession,
+    pledge: Pledge,
+    organization: Organization,
+) -> None:
+    await pledge_service.create_issue_rewards(
+        session,
+        pledge.issue_id,
+        splits=[
+            ConfirmIssueSplit(share_thousands=300, github_username="zegl"),
+            ConfirmIssueSplit(share_thousands=700, organization_id=organization.id),
+        ],
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_issue_rewards_associate_username(
+    session: AsyncSession,
+    pledge: Pledge,
+    organization: Organization,
+) -> None:
+    # create user and github auth
+    user = await User.create(
+        session=session,
+        username="test_gh_user",
+        email="test_gh_user@polar.sh",
+    )
+    oauth = await OAuthAccount.create(
+        session=session,
+        platform="github",
+        user_id=user.id,
+        access_token="access_token",
+        account_id="1337",
+        account_email="test_gh_user@polar.sh",
+    )
+
+    rewards = await pledge_service.create_issue_rewards(
+        session,
+        pledge.issue_id,
+        splits=[
+            ConfirmIssueSplit(share_thousands=300, github_username="test_gh_user"),
+            ConfirmIssueSplit(share_thousands=100, github_username="unknown_user"),
+            ConfirmIssueSplit(share_thousands=600, organization_id=organization.id),
+        ],
+    )
+
+    assert rewards[0].user_id == user.id
+    assert rewards[0].github_username == "test_gh_user"
+
+    assert rewards[1].user_id is None
+    assert rewards[1].github_username == "unknown_user"
+
+    assert rewards[2].organization_id == organization.id
+
+
+@pytest.mark.asyncio
+async def test_create_issue_rewards_invalid(
+    session: AsyncSession,
+    pledge: Pledge,
+    organization: Organization,
+) -> None:
+    with pytest.raises(Exception, match="invalid split configuration"):
+        await pledge_service.create_issue_rewards(
+            session,
+            pledge.issue_id,
+            splits=[
+                ConfirmIssueSplit(share_thousands=700, github_username="zegl"),
+                ConfirmIssueSplit(share_thousands=700, organization_id=organization.id),
+            ],
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_issue_rewards_twice_fails(
+    session: AsyncSession,
+    pledge: Pledge,
+    organization: Organization,
+) -> None:
+    await pledge_service.create_issue_rewards(
+        session,
+        pledge.issue_id,
+        splits=[
+            ConfirmIssueSplit(share_thousands=300, github_username="zegl"),
+            ConfirmIssueSplit(share_thousands=700, organization_id=organization.id),
+        ],
+    )
+
+    with pytest.raises(Exception, match=r"issue already has splits set: .*"):
+        await pledge_service.create_issue_rewards(
+            session,
+            pledge.issue_id,
+            splits=[
+                ConfirmIssueSplit(share_thousands=300, github_username="zegl"),
+                ConfirmIssueSplit(share_thousands=700, organization_id=organization.id),
+            ],
+        )
+
+
+@pytest.mark.asyncio
+async def test_generate_pledge_testdata(
+    session: AsyncSession,
+    user: User,
+    # pledge: Pledge,
+    # organization: Organization,
+) -> None:
+    org = await create_organization(session)
+    repo = await create_repository(session, organization=org)
+    issues = [
+        await create_issue(
+            session,
+            organization=org,
+            repository=repo,
+        )
+        for _ in range(1, 5)
+    ]
+
+    pledging_org = await create_organization(session)
+
+    # create pledges to each issue
+    # for issue in issues:
+    # for amount in [2000, 2500]:
+    # amount = secrets.randbelow(100000) + 1
+    # fee = round(amount * 0.05)
+    pledges = [
+        [
+            await Pledge.create(
+                session=session,
+                id=uuid.uuid4(),
+                # by_organization_id=pledging_organization.id,
+                issue_id=issue.id,
+                repository_id=issue.repository_id,
+                organization_id=issue.organization_id,
+                amount=2000,
+                fee=0,
+                state=PledgeState.created,
+                email="pledger@example.com",
+            ),
+            await Pledge.create(
+                session=session,
+                id=uuid.uuid4(),
+                by_organization_id=pledging_org.id,
+                issue_id=issue.id,
+                repository_id=issue.repository_id,
+                organization_id=issue.organization_id,
+                amount=2500,
+                fee=500,
+                state=PledgeState.created,
+                # email="pledger@example.com",
+            ),
+        ]
+        for issue in issues
+    ]
+
+    for p in pledges[0]:
+        p.state = PledgeState.pending
+    await IssueReward.create(
+        session,
+        issue_id=pledges[0][0].issue_id,
+        organization_id=org.id,
+        share_thousands=800,
+    )
+    await IssueReward.create(
+        session,
+        issue_id=pledges[0][0].issue_id,
+        github_username="zegl",
+        share_thousands=200,
+    )
+
+    for p in pledges[1]:
+        p.state = PledgeState.pending
+    await IssueReward.create(
+        session,
+        issue_id=pledges[1][0].issue_id,
+        organization_id=org.id,
+        share_thousands=800,
+    )
+    reward = await IssueReward.create(
+        session,
+        issue_id=pledges[1][0].issue_id,
+        github_username="zegl",
+        share_thousands=200,  # 20%
+    )
+
+    await PledgeTransaction.create(
+        session,
+        pledge_id=pledges[1][0].id,
+        type=PledgeTransactionType.transfer,
+        amount=5000,  # ?
+        transaction_id="text_123",
+        issue_reward_id=reward.id,
+    )
+
+    for p in pledges[2]:
+        p.state = PledgeState.confirmation_pending
+
+    pledges[3][0].state = PledgeState.disputed
+    pledges[3][0].dispute_reason = "I've been fooled."
+    pledges[3][0].disputed_at = utc_now()
+    pledges[3][0].disputed_by_user_id = user.id
+    pledges[3][1].state = PledgeState.charge_disputed
+
+    await session.commit()

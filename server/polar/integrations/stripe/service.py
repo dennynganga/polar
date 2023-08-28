@@ -7,7 +7,6 @@ from polar.config import settings
 from polar.models.issue import Issue
 from polar.models.organization import Organization
 from polar.models.user import User
-from polar.postgres import AsyncSession, sql
 
 stripe_lib.api_key = settings.STRIPE_SECRET_KEY
 
@@ -111,14 +110,12 @@ class StripeService:
                 return (b["currency"], b["amount"])
         return (account.default_currency, 0)
 
-    def create_account_link(
-        self, stripe_id: str, appendix: str | None = None
-    ) -> stripe_lib.AccountLink:
-        refresh_url = settings.generate_external_url("/integrations/stripe/refresh") + (
-            appendix or ""
+    def create_account_link(self, stripe_id: str) -> stripe_lib.AccountLink:
+        refresh_url = settings.generate_external_url(
+            f"/integrations/stripe/refresh?stripe_id={stripe_id}"
         )
-        return_url = settings.generate_external_url("/integrations/stripe/return") + (
-            appendix or ""
+        return_url = settings.generate_external_url(
+            f"/integrations/stripe/return?stripe_id={stripe_id}"
         )
         return stripe_lib.AccountLink.create(
             account=stripe_id,

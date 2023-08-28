@@ -5,15 +5,19 @@ import {
   MaintainerPledgeCreatedNotification,
   MaintainerPledgePaidNotification,
   MaintainerPledgePendingNotification,
+  MaintainerPledgedIssueConfirmationPendingNotification,
+  MaintainerPledgedIssuePendingNotification,
   NotificationRead,
   NotificationType,
   Organization,
   OrganizationPrivateRead,
   Platforms,
+  Pledge,
   PledgeRead,
   PledgeState,
   PledgerPledgePendingNotification,
   Repository,
+  RewardPaidNotification,
   State,
   UserRead,
   Visibility,
@@ -52,7 +56,6 @@ export const user: UserRead = {
   username: 'zegl',
   email: 'test@example.com',
   avatar_url: 'https://avatars.githubusercontent.com/u/47952?v=4',
-  invite_only_approved: true,
   accepted_terms_of_service: true,
   id: 'xxxabc-123',
   profile: {},
@@ -118,6 +121,22 @@ export const pledge: PledgeRead = {
   amount: 3000,
   repository_id: repo.id,
   organization_id: org.id,
+  state: PledgeState.CREATED,
+  // pledger_name?: string;
+  // pledger_avatar?: string;
+  // authed_user_can_admin?: boolean;
+  //scheduled_payout_at?: string;
+}
+
+// PublicAPI
+export const pledgePublicAPI: Pledge = {
+  id: 'pppp',
+  created_at: addDays(new Date(), -7).toISOString(),
+  // issue_id: issueRead.id,
+  issue: issue,
+  amount: { currency: 'USD', amount: 3000 },
+  // repository_id: repo.id,
+  // organization_id: org.id,
   state: PledgeState.CREATED,
   // pledger_name?: string;
   // pledger_avatar?: string;
@@ -191,6 +210,40 @@ const pledgerPledgePendingNotification: PledgerPledgePendingNotification = {
   pledge_date: addDays(new Date(), -2).toISOString(),
 }
 
+const rewardPaidNotification: RewardPaidNotification = {
+  paid_out_amount: '123.50',
+  issue_url: '#',
+  issue_title: 'Hello World',
+  issue_org_name: 'polarsource',
+  issue_repo_name: 'polar',
+  issue_number: 123,
+  issue_id: 'xx',
+  pledge_id: 'yyy',
+}
+const maintainerPledgedIssuePendingNotification: MaintainerPledgedIssuePendingNotification =
+  {
+    pledge_amount_sum: '123.50',
+    issue_url: '#',
+    issue_title: 'Hello World',
+    issue_org_name: 'polarsource',
+    issue_repo_name: 'polar',
+    issue_number: 123,
+    issue_id: 'xx',
+    maintainer_has_account: false,
+  }
+
+const maintainerPledgedIssueConfirmationPendingNotification: MaintainerPledgedIssueConfirmationPendingNotification =
+  {
+    pledge_amount_sum: '123.50',
+    issue_url: '#',
+    issue_title: 'Hello World',
+    issue_org_name: 'polarsource',
+    issue_repo_name: 'polar',
+    issue_number: 123,
+    issue_id: 'xx',
+    maintainer_has_account: false,
+  }
+
 export const notification_maintainerPledgeCreatedNotification: NotificationRead =
   {
     id: 'x',
@@ -222,3 +275,22 @@ export const notification_pledgerPledgePendingNotification = {
   type: NotificationType.PLEDGER_PLEDGE_PENDING_NOTIFICATION,
   payload: pledgerPledgePendingNotification,
 }
+
+export const notification_rewardPaidNotification = {
+  ...notification_maintainerPledgeCreatedNotification,
+  type: NotificationType.REWARD_PAID_NOTIFICATION,
+  payload: rewardPaidNotification,
+}
+
+export const notification_maintainerPledgedIssuePendingNotification = {
+  ...notification_maintainerPledgeCreatedNotification,
+  type: NotificationType.MAINTAINER_PLEDGED_ISSUE_PENDING_NOTIFICATION,
+  payload: maintainerPledgedIssuePendingNotification,
+}
+
+export const notification_maintainerPledgedIssueConfirmationPendingNotification =
+  {
+    ...notification_maintainerPledgeCreatedNotification,
+    type: NotificationType.MAINTAINER_PLEDGED_ISSUE_CONFIRMATION_PENDING_NOTIFICATION,
+    payload: maintainerPledgedIssueConfirmationPendingNotification,
+  }

@@ -1,25 +1,24 @@
 from __future__ import annotations
-from typing import Tuple
+
+from typing import Sequence, Tuple
 from uuid import UUID
 
 import stripe.error as stripe_lib_error
 import structlog
 
-from polar.models.user import User
-from .schemas import AccountCreate, AccountLink, AccountUpdate
-
-
+from polar.enums import AccountType
+from polar.integrations.open_collective.service import (
+    CollectiveNotFoundError,
+    OpenCollectiveAPIError,
+    open_collective,
+)
+from polar.integrations.stripe.service import stripe
+from polar.kit.extensions.sqlalchemy import sql
 from polar.kit.services import ResourceService
 from polar.models.account import Account
 from polar.postgres import AsyncSession
-from polar.enums import AccountType
-from polar.integrations.stripe.service import stripe
-from polar.integrations.open_collective.service import (
-    open_collective,
-    OpenCollectiveAPIError,
-    CollectiveNotFoundError,
-)
 
+from .schemas import AccountCreate, AccountLink, AccountUpdate
 
 log = structlog.get_logger()
 
@@ -36,22 +35,59 @@ class AccountAlreadyExistsError(AccountServiceError):
 
 
 class AccountService(ResourceService[Account, AccountCreate, AccountUpdate]):
+    async def get_by_org(
+        self, session: AsyncSession, organization_id: UUID
+    ) -> Account | None:
+        return await self.get_by(session=session, organization_id=organization_id)
+
+    async def get_by_user(self, session: AsyncSession, user_id: UUID) -> Account | None:
+        return await self.get_by(session=session, user_id=user_id)
+
+    async def list_by(
+        self,
+        session: AsyncSession,
+        *,
+        org_id: UUID | None,
+        user_id: UUID | None,
+    ) -> Sequence[Account]:
+        statement = sql.select(Account).where(Account.deleted_at.is_(None))
+
+        if org_id:
+            statement = statement.where(Account.organization_id == org_id)
+
+        if user_id:
+            statement = statement.where(Account.user_id == user_id)
+
+        res = await session.execute(statement)
+        return res.scalars().unique().all()
+
     async def create_account(
         self,
         session: AsyncSession,
-        organization_id: UUID,
+        *,
+        organization_id: UUID | None = None,
+        user_id: UUID | None = None,
         admin_id: UUID,
         account: AccountCreate,
     ) -> Account:
+        if organization_id and user_id:
+            raise AccountServiceError(
+                "both organization_id and user_id is set, this is not supported"
+            )
+
         existing = await self.get_by(session=session, organization_id=organization_id)
         if existing is not None:
             raise AccountAlreadyExistsError()
 
         if account.account_type == AccountType.stripe:
             return await self._create_stripe_account(
-                session, organization_id, admin_id, account
+                session,
+                organization_id=organization_id,
+                user_id=user_id,
+                admin_id=admin_id,
+                account=account,
             )
-        elif account.account_type == AccountType.open_collective:
+        elif account.account_type == AccountType.open_collective and organization_id:
             return await self._create_open_collective_account(
                 session, organization_id, admin_id, account
             )
@@ -61,7 +97,9 @@ class AccountService(ResourceService[Account, AccountCreate, AccountUpdate]):
     async def _create_stripe_account(
         self,
         session: AsyncSession,
-        organization_id: UUID,
+        *,
+        organization_id: UUID | None,
+        user_id: UUID | None,
         admin_id: UUID,
         account: AccountCreate,
     ) -> Account:
@@ -73,6 +111,7 @@ class AccountService(ResourceService[Account, AccountCreate, AccountUpdate]):
         return await Account.create(
             session=session,
             organization_id=organization_id,
+            user_id=user_id,
             admin_id=admin_id,
             account_type=account.account_type,
             stripe_id=stripe_account.stripe_id,
@@ -126,17 +165,11 @@ class AccountService(ResourceService[Account, AccountCreate, AccountUpdate]):
             data={},
         )
 
-    async def onboarding_link_for_user(
-        self, account: Account, user: User, appendix: str | None = None
-    ) -> AccountLink | None:
-        if account.admin_id != user.id:
-            # TODO: Error?
-            return None
-
+    async def onboarding_link(self, account: Account) -> AccountLink | None:
         if account.account_type == AccountType.stripe:
             assert account.stripe_id is not None
-            account_link = stripe.create_account_link(account.stripe_id, appendix)
-            return AccountLink(**account_link)
+            account_link = stripe.create_account_link(account.stripe_id)
+            return AccountLink(url=account_link.url)
 
         return None
 
@@ -144,13 +177,14 @@ class AccountService(ResourceService[Account, AccountCreate, AccountUpdate]):
         if account.account_type == AccountType.stripe:
             assert account.stripe_id is not None
             account_link = stripe.create_login_link(account.stripe_id)
-            return AccountLink(**account_link)
+            return AccountLink(url=account_link.url)
+
         elif account.account_type == AccountType.open_collective:
             assert account.open_collective_slug is not None
             dashboard_link = open_collective.create_dashboard_link(
                 account.open_collective_slug
             )
-            return AccountLink(created=1, url=dashboard_link)
+            return AccountLink(url=dashboard_link)
 
         return None
 

@@ -38,14 +38,18 @@ export const Modal: FunctionComponent<ModalProps> = ({
     <React.Fragment>
       <FocusLock>
         <div
-          className="fixed top-0 bottom-0 left-0 right-0 z-10"
+          className="fixed top-0 bottom-0 left-0 right-0 z-50"
           aria-modal
           tabIndex={-1}
           role="dialog"
         >
           <div
             className="flex h-full w-full items-center justify-center bg-black/50"
-            onClick={() => hide()}
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              hide()
+            }}
           >
             <div
               className="z-10 min-w-[800px] overflow-hidden rounded-xl bg-white shadow dark:bg-gray-800"
