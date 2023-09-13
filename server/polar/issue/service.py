@@ -6,6 +6,7 @@ from uuid import UUID
 import structlog
 from sqlalchemy import (
     ColumnElement,
+    Integer,
     and_,
     asc,
     desc,
@@ -36,10 +37,6 @@ log = structlog.get_logger()
 
 
 class IssueService(ResourceService[Issue, IssueCreate, IssueUpdate]):
-    @property
-    def upsert_constraints(self) -> list[InstrumentedAttribute[int]]:
-        return [self.model.external_id]
-
     async def get_loaded(
         self,
         session: AsyncSession,
@@ -76,6 +73,13 @@ class IssueService(ResourceService[Issue, IssueCreate, IssueUpdate]):
             organization_id=organization_id,
             repository_id=repository_id,
             number=number,
+        )
+
+    async def get_by_external_lookup_key(
+        self, session: AsyncSession, platform: Platforms, external_lookup_key: str
+    ) -> Issue | None:
+        return await self.get_by(
+            session, platform=platform, external_lookup_key=external_lookup_key
         )
 
     async def list_by_repository(
@@ -117,6 +121,7 @@ class IssueService(ResourceService[Issue, IssueCreate, IssueUpdate]):
         limit: int | None = None,
         include_statuses: list[IssueStatus] | None = None,
         have_polar_badge: bool | None = None,  # If issue has the polar badge or not
+        github_milestone_number: int | None = None,
     ) -> Tuple[Sequence[Issue], int]:  # (issues, total_issue_count)
         pledge_by_organization = aliased(Organization)
         issue_repository = aliased(Repository)
@@ -186,6 +191,11 @@ class IssueService(ResourceService[Issue, IssueCreate, IssueUpdate]):
         if have_polar_badge is not None:
             statement = statement.where(
                 Issue.pledge_badge_currently_embedded == have_polar_badge
+            )
+
+        if github_milestone_number is not None:
+            statement = statement.where(
+                Issue.milestone["number"].cast(Integer) == github_milestone_number
             )
 
         if include_statuses:

@@ -8,8 +8,10 @@ from polar.extension.endpoints import router as extension_router
 from polar.integrations.github.endpoints import router as github_router
 from polar.integrations.stripe.endpoints import router as stripe_router
 from polar.issue.endpoints import router as issue_router
+from polar.magic_link.endpoints import router as magic_link_router
 from polar.notifications.endpoints import router as notifications_router
 from polar.organization.endpoints import router as organization_router
+from polar.payment_method.endpoints import router as payment_method_router
 from polar.personal_access_token.endpoints import router as pat_router
 from polar.pledge.endpoints import router as pledge_router
 from polar.pull_request.endpoints import router as pull_request_router
@@ -31,6 +33,8 @@ router.include_router(backoffice_router)
 router.include_router(dashboard_router)
 # /extension
 router.include_router(extension_router)
+# /magic-link
+router.include_router(magic_link_router)
 # /notifications
 router.include_router(notifications_router)
 # /repositories
@@ -39,6 +43,8 @@ router.include_router(repository_router)
 router.include_router(rewards_router)
 # /personal_access_tokens
 router.include_router(pat_router)
+# /payment_methods
+router.include_router(payment_method_router)
 # /{platform}/{org_name}/{repo_name}/accounts
 # /accounts
 router.include_router(accounts_router)

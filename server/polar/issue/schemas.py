@@ -27,9 +27,11 @@ from polar.models.issue_reference import (
     IssueReference,
     ReferenceType,
 )
+from polar.models.organization import Organization as OrganizationModel
+from polar.models.repository import Repository as RepositoryModel
 from polar.organization.schemas import Organization
 from polar.repository.schemas import Repository
-from polar.types import JSONAny
+from polar.types import JSONAny, JSONDict
 
 log = structlog.get_logger()
 
@@ -99,7 +101,7 @@ class Issue(Schema):
                 for label in i.labels
                 if "name" in label and "color" in label
             ]
-            if i.labels
+            if i.labels and isinstance(i.labels, list)
             else []
         )
 
@@ -208,8 +210,8 @@ class IssueAndPullRequestBase(Base):
             github.webhooks.PullRequestClosedPropPullRequest,
             github.webhooks.PullRequestReopenedPropPullRequest,
         ],
-        organization_id: UUID,
-        repository_id: UUID,
+        organization: OrganizationModel,
+        repository: RepositoryModel,
     ) -> Self:
         """
         normalizes both issues and pull requests
@@ -244,8 +246,8 @@ class IssueAndPullRequestBase(Base):
         return cls(
             platform=Platforms.github,
             external_id=data.id,
-            organization_id=organization_id,
-            repository_id=repository_id,
+            organization_id=organization.id,
+            repository_id=repository.id,
             number=data.number,
             title=data.title,
             body=data.body if data.body else "",
@@ -268,6 +270,7 @@ class IssueAndPullRequestBase(Base):
 
 
 class IssueCreate(IssueAndPullRequestBase):
+    external_lookup_key: str | None = None
     has_pledge_badge_label: bool = False
     pledge_badge_currently_embedded: bool = False
     positive_reactions_count: int = 0
@@ -283,14 +286,12 @@ class IssueCreate(IssueAndPullRequestBase):
             github.webhooks.IssuesClosedPropIssue,
             github.webhooks.IssuesReopenedPropIssue,
         ],
-        organization_id: UUID,
-        repository_id: UUID,
+        organization: OrganizationModel,
+        repository: RepositoryModel,
     ) -> Self:
-        ret = super().get_normalized_github_issue(
-            data,
-            organization_id=organization_id,
-            repository_id=repository_id,
-        )
+        ret = super().get_normalized_github_issue(data, organization, repository)
+
+        ret.external_lookup_key = f"{organization.name}/{repository.name}/{data.number}"
 
         ret.has_pledge_badge_label = IssueModel.contains_pledge_badge_label(ret.labels)
 
@@ -299,15 +300,19 @@ class IssueCreate(IssueAndPullRequestBase):
                 ret.body
             )
 
-        # excluding: confused, minus_one
-        ret.positive_reactions_count = (
-            data.reactions.plus_one
-            + data.reactions.laugh
-            + data.reactions.heart
-            + data.reactions.hooray
-            + data.reactions.eyes
-            + data.reactions.rocket
-        )
+        # this is not good, we're risking setting positive_reactions_count to 0 if the
+        # payload is missing
+        # TODO: only update if payload actually is set
+        if data.reactions:
+            # excluding: confused, minus_one
+            ret.positive_reactions_count = (
+                data.reactions.plus_one
+                + data.reactions.laugh
+                + data.reactions.heart
+                + data.reactions.hooray
+                + data.reactions.eyes
+                + data.reactions.rocket
+            )
 
         ret.total_engagement_count = data.reactions.total_count + data.comments
 
@@ -392,13 +397,21 @@ class IssueReferenceRead(Schema):
         match m.reference_type:
             case ReferenceType.PULL_REQUEST:
                 if pr := m.pull_request:
-                    avatar = pr.author.get("avatar_url", None) if pr.author else None
+                    avatar = (
+                        pr.author.get("avatar_url", None)
+                        if pr.author and isinstance(pr.author, dict)
+                        else None
+                    )
                     if not avatar:
                         raise Exception(
                             "unable to convert IssueReference to IssueReferenceRead"
                         )
 
-                    login = pr.author.get("login", None) if pr.author else None
+                    login = (
+                        pr.author.get("login", None)
+                        if pr.author and isinstance(pr.author, dict)
+                        else None
+                    )
                     if not login:
                         raise Exception(
                             "unable to convert IssueReference to IssueReferenceRead"

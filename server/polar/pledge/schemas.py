@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
+from typing import Literal
 from uuid import UUID
 
 from pydantic import Field
@@ -10,21 +11,27 @@ from polar.currency.schemas import CurrencyAmount
 from polar.issue.schemas import Issue
 from polar.kit.schemas import Schema
 from polar.models.pledge import Pledge as PledgeModel
-from polar.organization.schemas import Organization
-from polar.repository.schemas import Repository
 
 
 # Public API
 class PledgeState(str, Enum):
     # Initiated by customer. Polar has not received money yet.
     initiated = "initiated"
-    # Polar has received the money.
+
+    # The pledge has been created.
+    # Type=pay_upfront: polar has recevied the money
+    # Type=pay_on_completion: polar has not recevied the money
     created = "created"
+
     # The issue has been closed, awaiting maintainer to confirm the issue is fixed.
     confirmation_pending = "confirmation_pending"
+
     # The fix was confirmed, and rewards have been created.
     # See issue rewards to track payment status.
+    # Type=pay_upfront: polar has recevied the money
+    # Type=pay_on_completion: polar has recevied the money
     pending = "pending"
+
     # The pledge was refunded in full before being paid out.
     refunded = "refunded"
     # The pledge was disputed by the customer (via Polar)
@@ -42,8 +49,16 @@ class PledgeState(str, Enum):
             cls.disputed,
         ]
 
-    # Happy path:
-    # initiated -> created -> confirmation_pending -> pending
+    # Happy paths:
+    #   Pay upfront:
+    #       initiated -> created -> confirmation_pending -> pending -> (transfer)
+    #
+    #   Pay later (pay_on_completion / pay_from_maintainer):
+    #       created -> pending -> (transfer)
+    #
+    #   Pay regardless:
+    #       pending -> (transfer)
+    #
 
     @classmethod
     def to_created_states(cls) -> list[PledgeState]:
@@ -69,7 +84,7 @@ class PledgeState(str, Enum):
     @classmethod
     def to_disputed_states(cls) -> list[PledgeState]:
         """
-        Allowed states to move into disputed from
+        # Allowed states to move into disputed from
         """
         return [cls.created, cls.confirmation_pending, cls.pending]
 
@@ -92,6 +107,25 @@ class PledgeState(str, Enum):
         return PledgeState.__members__[s]
 
 
+class PledgeType(str, Enum):
+    # Up front pledges, paid to Polar directly, transfered to maintainer when completed.
+    pay_upfront = "pay_upfront"
+
+    # Pledge without upfront payment. The pledger pays after the issue is completed.
+    pay_on_completion = "pay_on_completion"
+
+    # Pledge without upfront payment. Added bonus / bounty from maintainer to collaborators.  # noqa: E501
+    pay_from_maintainer = "pay_from_maintainer"
+
+    # Pay directly. Money is ready to transfered to maintainer without requiring
+    # issue to be completed.
+    pay_directly = "pay_directly"
+
+    @classmethod
+    def from_str(cls, s: str) -> PledgeType:
+        return PledgeType.__members__[s]
+
+
 class Pledger(Schema):
     name: str
     github_username: str | None
@@ -104,6 +138,7 @@ class Pledge(Schema):
     created_at: datetime = Field(description="When the pledge was created")
     amount: CurrencyAmount = Field(description="Amount pledged towards the issue")
     state: PledgeState = Field(description="Current state of the pledge")
+    type: PledgeType = Field(description="Type of pledge")
 
     refunded_at: datetime | None = Field(
         description="If and when the pledge was refunded to the pledger"
@@ -118,6 +153,8 @@ class Pledge(Schema):
     pledger: Pledger | None = Field(
         description="The user or organization that made this pledge"
     )
+
+    hosted_invoice_url: str | None = Field(description="URL of invoice for this pledge")
 
     @classmethod
     def from_db(cls, o: PledgeModel) -> Pledge:
@@ -142,14 +179,25 @@ class Pledge(Schema):
             created_at=o.created_at,
             amount=CurrencyAmount(currency="USD", amount=o.amount),
             state=PledgeState.from_str(o.state),
+            type=PledgeType.from_str(o.type),
             refunded_at=o.refunded_at,
             scheduled_payout_at=o.scheduled_payout_at,
             issue=Issue.from_db(o.issue),
             pledger=pledger,
+            hosted_invoice_url=o.invoice_hosted_url,
         )
 
 
 # Internal APIs below
+
+
+class CreatePledgeFromPaymentIntent(Schema):
+    payment_intent_id: str
+
+
+class CreatePledgePayLater(Schema):
+    issue_id: UUID
+    amount: int
 
 
 class PledgeTransactionType(str, Enum):
@@ -159,28 +207,27 @@ class PledgeTransactionType(str, Enum):
     disputed = "disputed"
 
 
-class PledgeCreate(Schema):
+class PledgeStripePaymentIntentCreate(Schema):
     issue_id: UUID
-    email: str | None = None
+    email: str
     amount: int
-    pledge_as_org: UUID | None = None
+    setup_future_usage: Literal["on_session"] | None
 
 
-class PledgeUpdate(Schema):
-    email: str | None
-    amount: int | None
-    pledge_as_org: UUID | None = None
+class PledgeStripePaymentIntentUpdate(Schema):
+    email: str
+    amount: int
+    setup_future_usage: Literal["on_session"] | None
 
 
-class PledgeMutationResponse(PledgeCreate):
-    id: UUID
-    state: PledgeState
+class PledgeStripePaymentIntentMutationResponse(Schema):
+    # pledge_id: UUID
+    payment_intent_id: str
+    # state: PledgeState
+    amount: int
     fee: int
     amount_including_fee: int
     client_secret: str | None = None
-
-    class Config:
-        orm_mode = True
 
 
 class PledgeRead(Schema):
@@ -235,14 +282,3 @@ class PledgeRead(Schema):
             scheduled_payout_at=o.scheduled_payout_at,
             pledger_user_id=o.by_user_id,
         )
-
-
-class PledgeResources(Schema):
-    pledge: PledgeRead
-    issue: Issue | None
-    organization: Organization | None
-    repository: Repository | None
-
-
-class ConfirmPledgesResponse(Schema):
-    ...

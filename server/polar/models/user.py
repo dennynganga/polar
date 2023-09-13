@@ -2,10 +2,10 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from sqlalchemy import TIMESTAMP, Boolean, ForeignKey, Integer, String
+from sqlalchemy import TIMESTAMP, Boolean, ForeignKey, Integer, String, func, Column
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy.schema import UniqueConstraint
+from sqlalchemy.schema import Index, UniqueConstraint
 
 from polar.enums import Platforms
 from polar.kit.db.models import RecordModel
@@ -38,9 +38,14 @@ class OAuthAccount(RecordModel):
 
 class User(RecordModel):
     __tablename__ = "users"
+    __table_args__ = (
+        Index(
+            "ix_users_email_case_insensitive", func.lower(Column("email")), unique=True
+        ),
+    )
 
     username: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
-    email: Mapped[str] = mapped_column(String(320), unique=True, nullable=False)
+    email: Mapped[str] = mapped_column(String(320), nullable=False)
     avatar_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
 
     profile: Mapped[dict[str, Any] | None] = mapped_column(
@@ -74,12 +79,9 @@ class User(RecordModel):
         Boolean, nullable=False, default=True
     )
 
-    __mutables__ = {
-        "email",
-        "profile",
-        "invite_only_approved",
-        "accepted_terms_of_service",
-    }
+    stripe_customer_id: Mapped[str | None] = mapped_column(
+        String, nullable=True, default=None
+    )
 
     def get_platform_oauth_account(self, platform: Platforms) -> OAuthAccount | None:
         return next(
@@ -90,3 +92,7 @@ class User(RecordModel):
             ),
             None,
         )
+
+    @property
+    def posthog_distinct_id(self) -> str:
+        return f"user:{self.id}"

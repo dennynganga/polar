@@ -28,10 +28,6 @@ log = structlog.get_logger()
 class OrganizationService(
     ResourceService[Organization, OrganizationCreate, OrganizationUpdate]
 ):
-    @property
-    def upsert_constraints(self) -> list[InstrumentedAttribute[int]]:
-        return [self.model.external_id]
-
     async def list_installed(self, session: AsyncSession) -> Sequence[Organization]:
         stmt = sql.select(Organization).where(
             Organization.deleted_at.is_(None),
@@ -179,7 +175,9 @@ class OrganizationService(
             user_id=user_id,
         )
         if not org:
-            raise ResourceNotFound()
+            raise ResourceNotFound(
+                "Organization/repository combination not found for user"
+            )
 
         # Return a tuple of (org, repo) for intuititive usage (unpacking)
         # versus having to do org.repos[0] in the caller.
@@ -222,7 +220,7 @@ class OrganizationService(
             repo_name=repo_name,
         )
         if not org_and_repo:
-            raise ResourceNotFound()
+            raise ResourceNotFound("Organization and repo combination not found")
 
         organization, repository = org_and_repo
         if isinstance(issue, int):
@@ -239,7 +237,7 @@ class OrganizationService(
                 id=issue,
             )
         if not issue_obj:
-            raise ResourceNotFound()
+            raise ResourceNotFound("Issue not found")
 
         return (organization, repository, issue_obj)
 
@@ -366,6 +364,38 @@ class OrganizationService(
         # update the in memory version as well
         org.default_badge_custom_content = message
         return org
+
+    async def create_or_update(
+        self, session: AsyncSession, r: OrganizationCreate
+    ) -> Organization:
+        update_keys = {
+            "name",
+            "avatar_url",
+            "is_personal",
+            "installation_id",
+            "installation_created_at",
+            "installation_updated_at",
+            "installation_suspended_at",
+            "status",
+            "pledge_badge_show_amount",
+            "pledge_minimum_amount",
+            "deleted_at",
+        }
+
+        insert_stmt = sql.insert(Organization).values(**r.dict())
+
+        stmt = (
+            insert_stmt.on_conflict_do_update(
+                index_elements=[Organization.external_id],
+                set_={k: getattr(insert_stmt.excluded, k) for k in update_keys},
+            )
+            .returning(Organization)
+            .execution_options(populate_existing=True)
+        )
+
+        res = await session.execute(stmt)
+        await session.commit()
+        return res.scalars().one()
 
 
 organization = OrganizationService(Organization)

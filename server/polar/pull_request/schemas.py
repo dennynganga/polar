@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from uuid import UUID
 from datetime import datetime
 from typing import Self, Union
+from uuid import UUID
 
 import structlog
 
 from polar.integrations.github import client as github
 from polar.issue.schemas import IssueAndPullRequestBase
+from polar.models import Organization, Repository
 from polar.types import JSONAny
 
 log = structlog.get_logger()
@@ -16,6 +17,25 @@ log = structlog.get_logger()
 # some of the fields shared between IssueAndPullRequestBase + CreatePullRequest.
 # However, we leverage the IssueAndPullRequestBase.get_normalized_github_issue
 # method to reduce the amount of reduction to stay DRY-ish.
+
+common_mutable_keys = {
+    "title",
+    "body",
+    "comments",
+    "author",
+    "author_association",
+    "labels",
+    "assignee",
+    "assignees",
+    "milestone",
+    "closed_by",
+    "reactions",
+    "state",
+    "state_reason",
+    "issue_closed_at",
+    "issue_modified_at",
+    "issue_created_at",
+}
 
 
 class MinimalPullRequestCreate(IssueAndPullRequestBase):
@@ -37,7 +57,7 @@ class MinimalPullRequestCreate(IssueAndPullRequestBase):
     # and avoiding overriding our internal ones
     issue_created_at: datetime
 
-    __mutable_keys__ = IssueAndPullRequestBase.__mutable_keys__ | {
+    __mutable_keys__ = common_mutable_keys | {
         "requested_reviewers",
         "requested_teams",
         "is_merged",
@@ -60,14 +80,10 @@ class MinimalPullRequestCreate(IssueAndPullRequestBase):
             github.webhooks.PullRequestClosedPropPullRequest,
             github.webhooks.PullRequestReopenedPropPullRequest,
         ],
-        organization_id: UUID,
-        repository_id: UUID,
+        organization: Organization,
+        repository: Repository,
     ) -> Self:
-        create = cls.get_normalized_github_issue(
-            pr,
-            organization_id,
-            repository_id,
-        )
+        create = cls.get_normalized_github_issue(pr, organization, repository)
 
         create.requested_reviewers = github.jsonify(pr.requested_reviewers)
         create.requested_teams = github.jsonify(pr.requested_teams)
@@ -115,12 +131,10 @@ class FullPullRequestCreate(MinimalPullRequestCreate):
             github.webhooks.PullRequestClosedPropPullRequest,
             github.webhooks.PullRequestReopenedPropPullRequest,
         ],
-        organization_id: UUID,
-        repository_id: UUID,
+        organization: Organization,
+        repository: Repository,
     ) -> Self:
-        create = cls.minimal_pull_request_from_github(
-            pr, organization_id, repository_id
-        )
+        create = cls.minimal_pull_request_from_github(pr, organization, repository)
 
         create.merged_by = github.jsonify(pr.merged_by)
 
